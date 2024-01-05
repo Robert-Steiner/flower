@@ -1,0 +1,9 @@
+FROM flwr/client:1.6.0-py3.8-ubuntu22.04
+
+WORKDIR /app
+RUN python -m pip uninstall -y flwr
+COPY requirements.txt .
+RUN python -m pip install -U --no-cache-dir -r requirements.txt
+
+COPY driver.py .
+ENTRYPOINT ["python", "driver.py"]

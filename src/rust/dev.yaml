@@ -1,0 +1,2 @@
+database:
+  url: "postgres://root:pw@localhost:5432/flwr"

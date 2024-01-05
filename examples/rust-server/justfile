@@ -1,0 +1,11 @@
+default:
+    @{{just_executable()}} --list
+
+docker-compose-up:
+    docker-compose -f compose.yml up --remove-orphans --build -d
+
+docker-compose-down:
+    docker-compose -f compose.yml down
+
+docker-compose-down-v:
+    docker-compose -f compose.yml down --volumes

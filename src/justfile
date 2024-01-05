@@ -1,0 +1,14 @@
+default:
+    @{{just_executable()}} --list
+
+docker-build:
+    docker build -f docker/server-rust/Dockerfile -t "server:latest" .
+
+docker-build-distroless:
+    docker build -f docker/server-rust/Dockerfile --build-arg base_image=distroless -t "server:latest" .
+
+docker-run:
+    docker run --rm -p 50051:50051 "server:latest"
+
+docker-compose:
+    docker-compose -f docker/compose.yml up --remove-orphans
