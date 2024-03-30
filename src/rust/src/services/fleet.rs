@@ -11,7 +11,10 @@ use tracing::instrument;
 use crate::{
     error::Error,
     handler::fleet::FleetHandler,
-    model::{self},
+    model::handler::{
+        AcknowledgePingRequest, DeleteNodeRequest, PullTaskInstructionsRequest,
+        PullTaskInstructionsResult, PushTaskResultRequest,
+    },
 };
 
 use super::{
@@ -64,7 +67,7 @@ impl Fleet for FleetService {
         &self,
         request: Request<pb::DeleteNodeRequest>,
     ) -> Result<Response<pb::DeleteNodeResponse>, Status> {
-        let node = model::DeleteNodeRequest::try_from(request.into_inner())
+        let node = DeleteNodeRequest::try_from(request.into_inner())
             .map_err(validation_err_into_grpc_err)?;
         self.handler
             .delete_node(&node)
@@ -78,7 +81,7 @@ impl Fleet for FleetService {
         &self,
         request: Request<pb::PullTaskInsRequest>,
     ) -> Result<Response<pb::PullTaskInsResponse>, Status> {
-        let request = model::PullTaskInstructionsRequest::try_from(request.into_inner())
+        let request = PullTaskInstructionsRequest::try_from(request.into_inner())
             .map_err(validation_err_into_grpc_err)?;
 
         let task_ins_list = self
@@ -102,7 +105,7 @@ impl Fleet for FleetService {
         &self,
         request: Request<pb::PushTaskResRequest>,
     ) -> Result<Response<pb::PushTaskResResponse>, Status> {
-        let request = model::PushTaskResultRequest::try_from((request.into_inner(), &self.config))
+        let request = PushTaskResultRequest::try_from((request.into_inner(), &self.config))
             .map_err(validation_err_into_grpc_err)?;
 
         let results = self
@@ -120,13 +123,22 @@ impl Fleet for FleetService {
     #[instrument(skip_all)]
     async fn ping(
         &self,
-        _request: Request<pb::PingRequest>,
+        request: Request<pb::PingRequest>,
     ) -> Result<Response<pb::PingResponse>, Status> {
-        Ok(Response::new(pb::PingResponse { success: true }))
+        let request = AcknowledgePingRequest::try_from(request.into_inner())
+            .map_err(validation_err_into_grpc_err)?;
+
+        let success = self
+            .handler
+            .acknowledge_ping(&request)
+            .await
+            .map_err(into_internal_server_err)?;
+
+        Ok(Response::new(pb::PingResponse { success }))
     }
 }
 
-impl TryFrom<pb::DeleteNodeRequest> for model::DeleteNodeRequest {
+impl TryFrom<pb::DeleteNodeRequest> for DeleteNodeRequest {
     type Error = ErrorDetails;
 
     fn try_from(value: pb::DeleteNodeRequest) -> Result<Self, Self::Error> {
@@ -150,10 +162,10 @@ impl TryFrom<pb::DeleteNodeRequest> for model::DeleteNodeRequest {
     }
 }
 
-impl TryFrom<model::PullTaskInstructionsResult> for pb::TaskIns {
+impl TryFrom<PullTaskInstructionsResult> for pb::TaskIns {
     type Error = Error;
 
-    fn try_from(value: model::PullTaskInstructionsResult) -> Result<Self, Self::Error> {
+    fn try_from(value: PullTaskInstructionsResult) -> Result<Self, Self::Error> {
         let recordset: pb::RecordSet = Message::decode(&value.recordset[..])?;
 
         Ok(Self {
@@ -180,7 +192,7 @@ impl TryFrom<model::PullTaskInstructionsResult> for pb::TaskIns {
     }
 }
 
-impl TryFrom<pb::PullTaskInsRequest> for model::PullTaskInstructionsRequest {
+impl TryFrom<pb::PullTaskInsRequest> for PullTaskInstructionsRequest {
     type Error = ErrorDetails;
 
     fn try_from(value: pb::PullTaskInsRequest) -> Result<Self, Self::Error> {
@@ -207,7 +219,7 @@ impl TryFrom<pb::PullTaskInsRequest> for model::PullTaskInstructionsRequest {
     }
 }
 
-impl TryFrom<(pb::PushTaskResRequest, &Config)> for model::PushTaskResultRequest {
+impl TryFrom<(pb::PushTaskResRequest, &Config)> for PushTaskResultRequest {
     type Error = ErrorDetails;
 
     fn try_from(
@@ -353,6 +365,40 @@ impl TryFrom<(pb::PushTaskResRequest, &Config)> for model::PushTaskResultRequest
             ancestry: task.ancestry.into_iter().join(ANCESTRY_SEPARATOR),
             task_type: task.task_type,
             recordset,
+        })
+    }
+}
+
+impl TryFrom<pb::PingRequest> for AcknowledgePingRequest {
+    type Error = ErrorDetails;
+
+    fn try_from(value: pb::PingRequest) -> Result<Self, Self::Error> {
+        let mut err_details = ErrorDetails::new();
+
+        let path = field!(node @ pb::PingRequest);
+        let node = match value.node {
+            Some(node) => node,
+            None => {
+                err_details.add_bad_request_violation(path, "Must not be empty.");
+                return Err(err_details);
+            }
+        };
+
+        if let Err(violation) = validate_node(&node, path) {
+            err_details.add_bad_request_violation(violation.field, violation.description);
+            return Err(err_details);
+        };
+
+        if value.ping_interval <= 0. {
+            err_details.add_bad_request_violation(
+                format!("{}.{}", path, field!(ping_interval @ pb::PingRequest)),
+                "Must not be negative or zero.",
+            );
+        }
+
+        Ok(Self {
+            node: node.into(),
+            ping_interval: value.ping_interval,
         })
     }
 }

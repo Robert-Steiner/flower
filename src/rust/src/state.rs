@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::{
     error::Error,
     model::{
-        InsertNode, InsertTaskInstruction, InsertTaskResult, Node, PullTaskInstructionsResult,
-        PullTaskResultResponse,
+        handler::{Node, PullTaskInstructionsResult, PullTaskResultResponse},
+        state::{InsertNode, InsertTaskInstruction, InsertTaskResult, UpdatePing},
     },
 };
 
@@ -35,4 +35,5 @@ pub trait State: Sync + Send + Debug {
     async fn delete_node(&self, id: i64) -> Result<(), Error>;
     async fn nodes(&self, run_id: i64) -> Result<HashSet<i64>, Error>;
     async fn insert_run(&self, id: i64) -> Result<(), Error>;
+    async fn update_ping(&self, ping: &UpdatePing) -> Result<bool, Error>;
 }

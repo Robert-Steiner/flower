@@ -13,8 +13,10 @@ use uuid::Uuid;
 use crate::{
     error::Error,
     model::{
-        InsertNode, InsertTaskInstruction, InsertTaskResult, Node, PullTaskInstructionsResult,
-        PullTaskResultResponse, TaskInstructionOrResult,
+        handler::{
+            Node, PullTaskInstructionsResult, PullTaskResultResponse, TaskInstructionOrResult,
+        },
+        state::{InsertNode, InsertTaskInstruction, InsertTaskResult, UpdatePing},
     },
 };
 
@@ -298,6 +300,24 @@ impl State for Postgres {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    #[instrument(skip_all, level = "debug")]
+    async fn update_ping(&self, ping: &UpdatePing) -> Result<bool, Error> {
+        let res = sqlx::query(
+            "UPDATE node SET online_until = $1, ping_interval = $2 WHERE node_id = $3;",
+        )
+        .bind(ping.online_until)
+        .bind(ping.ping_interval)
+        .bind(ping.id)
+        .execute(&self.pool)
+        .await;
+
+        match res {
+            Err(sqlx::Error::RowNotFound) => Ok(false),
+            Ok(_) => Ok(true),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

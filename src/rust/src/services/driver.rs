@@ -12,7 +12,10 @@ use uuid::Uuid;
 use crate::{
     error::Error,
     handler::driver::DriverHandler,
-    model::{self, PullTaskResultResponse},
+    model::handler::{
+        PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest,
+        TaskInstructionRequest,
+    },
 };
 
 use super::{
@@ -82,9 +85,8 @@ impl Driver for DriverService {
         &self,
         request: Request<pb::PushTaskInsRequest>,
     ) -> Result<Response<pb::PushTaskInsResponse>, Status> {
-        let request =
-            model::PushTaskInstructionsRequest::try_from((request.into_inner(), &self.config))
-                .map_err(validation_err_into_grpc_err)?;
+        let request = PushTaskInstructionsRequest::try_from((request.into_inner(), &self.config))
+            .map_err(validation_err_into_grpc_err)?;
 
         let task_ids = self
             .handler
@@ -106,7 +108,7 @@ impl Driver for DriverService {
         &self,
         request: Request<pb::PullTaskResRequest>,
     ) -> Result<Response<pb::PullTaskResResponse>, Status> {
-        let request = model::PullTaskResultsRequest::try_from(request.into_inner())
+        let request = PullTaskResultsRequest::try_from(request.into_inner())
             .map_err(validation_err_into_grpc_err)?;
 
         let task_results = self
@@ -125,7 +127,7 @@ impl Driver for DriverService {
     }
 }
 
-impl TryFrom<pb::PullTaskResRequest> for model::PullTaskResultsRequest {
+impl TryFrom<pb::PullTaskResRequest> for PullTaskResultsRequest {
     type Error = ErrorDetails;
 
     fn try_from(value: pb::PullTaskResRequest) -> Result<Self, Self::Error> {
@@ -148,7 +150,7 @@ impl TryFrom<pb::PullTaskResRequest> for model::PullTaskResultsRequest {
     }
 }
 
-impl TryFrom<(pb::PushTaskInsRequest, &Config)> for model::PushTaskInstructionsRequest {
+impl TryFrom<(pb::PushTaskInsRequest, &Config)> for PushTaskInstructionsRequest {
     type Error = ErrorDetails;
 
     fn try_from((request, config): (pb::PushTaskInsRequest, &Config)) -> Result<Self, Self::Error> {
@@ -291,7 +293,7 @@ impl TryFrom<(pb::PushTaskInsRequest, &Config)> for model::PushTaskInstructionsR
                     }
                 };
 
-                Ok(model::TaskInstructionRequest {
+                Ok(TaskInstructionRequest {
                     group_id: task_ins.group_id,
                     run_id: task_ins.run_id,
                     producer: producer.into(),

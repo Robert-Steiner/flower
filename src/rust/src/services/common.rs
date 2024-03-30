@@ -5,7 +5,7 @@ use tonic::{Code, Status};
 use tonic_types::{ErrorDetails, FieldViolation, StatusExt};
 use tracing::{error, info};
 
-use crate::model::Node;
+use crate::model::handler::Node;
 
 use super::pb;
 

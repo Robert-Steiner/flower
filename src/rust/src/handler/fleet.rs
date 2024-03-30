@@ -9,8 +9,11 @@ use crate::{
     error::Error,
     handler::common::new_id,
     model::{
-        DeleteNodeRequest, InsertNode, InsertTaskResult, Node, PullTaskInstructionsRequest,
-        PullTaskInstructionsResult, PushTaskResultRequest,
+        handler::{
+            AcknowledgePingRequest, DeleteNodeRequest, Node, PullTaskInstructionsRequest,
+            PullTaskInstructionsResult, PushTaskResultRequest,
+        },
+        state::{InsertNode, InsertTaskResult, UpdatePing},
     },
     state::State,
 };
@@ -106,5 +109,17 @@ impl FleetHandler {
         info!(task_id = ?id);
 
         Ok(results)
+    }
+    #[instrument(skip_all, level = "debug")]
+    pub async fn acknowledge_ping(&self, request: &AcknowledgePingRequest) -> Result<bool, Error> {
+        let (node_id, _) = (&request.node).into();
+        let ping_interval = Duration::from_secs_f64(request.ping_interval);
+        self.state
+            .update_ping(&UpdatePing {
+                id: node_id,
+                online_until: Utc::now() + ping_interval,
+                ping_interval: ping_interval,
+            })
+            .await
     }
 }

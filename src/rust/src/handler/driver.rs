@@ -9,8 +9,8 @@ use crate::{
     error::Error,
     handler::common::new_id,
     model::{
-        InsertTaskInstruction, PullTaskResultResponse, PullTaskResultsRequest,
-        PushTaskInstructionsRequest,
+        handler::{PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest},
+        state::InsertTaskInstruction,
     },
     state::State,
 };
