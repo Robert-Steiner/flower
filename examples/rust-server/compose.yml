@@ -47,8 +47,10 @@ services:
       - 9000:9000
     environment:
       - FLWR_LOGGING__LEVEL=INFO,flwr=DEBUG,sqlx::query=debug
+      - FLWR_TRACER__ENABLED=true
+      - FLWR_TRACER__ENDPOINT=http://jaegertracing:4317
       # - FLWR_LOGGING__LEVEL=INFO
-      - FLWR_DATABASE__URL="postgres://${POSTGRES_USER:-root}:${POSTGRES_PASSWORD:-pw}@postgres:5432/flwr"
+      - FLWR_DATABASE__URI="postgres://${POSTGRES_USER:-root}:${POSTGRES_PASSWORD:-pw}@postgres:5432/flwr"
     networks:
       - internal
     healthcheck:

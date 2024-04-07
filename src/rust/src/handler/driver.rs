@@ -7,11 +7,8 @@ use uuid::Uuid;
 
 use crate::{
     error::Error,
-    handler::common::new_id,
-    model::{
-        handler::{PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest},
-        state::InsertTaskInstruction,
-    },
+    handler::common::{new_id, new_task_instruction_or_result},
+    model::handler::{PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest},
     state::State,
 };
 
@@ -55,35 +52,15 @@ impl DriverHandler {
         &self,
         request: PushTaskInstructionsRequest,
     ) -> Result<Vec<Uuid>, Error> {
-        let mut task_ids = Vec::with_capacity(request.instructions.len());
-        let model = request
+        let (task_ids, task_instructions): (Vec<_>, Vec<_>) = request
             .instructions
             .into_iter()
-            .map(|task_in| {
-                let id = Uuid::new_v4();
-                let (producer_node_id, producer_anonymous) = (&task_in.producer).into();
-                let (consumer_node_id, consumer_anonymous) = (&task_in.consumer).into();
-                task_ids.push(id.clone());
-                InsertTaskInstruction {
-                    id,
-                    group_id: task_in.group_id,
-                    run_id: task_in.run_id,
-                    producer_node_id,
-                    producer_anonymous,
-                    consumer_node_id,
-                    consumer_anonymous,
-                    created_at: task_in.created_at,
-                    delivered_at: task_in.delivered_at,
-                    published_at: task_in.published_at,
-                    ttl: task_in.ttl,
-                    ancestry: task_in.ancestry,
-                    task_type: task_in.task_type,
-                    recordset: task_in.recordset,
-                }
-            })
-            .collect();
+            .map(new_task_instruction_or_result)
+            .unzip();
 
-        self.state.insert_task_instructions(&model).await?;
+        self.state
+            .insert_task_instructions(&task_instructions[..])
+            .await?;
 
         info!(
             sample = ?task_ids.iter().take(5).collect_vec(),

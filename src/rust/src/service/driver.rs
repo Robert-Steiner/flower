@@ -1,6 +1,5 @@
 use std::{collections::HashSet, time::Duration};
 
-use chrono::Utc;
 use field::field;
 use itertools::Itertools;
 use prost::Message;
@@ -13,14 +12,15 @@ use crate::{
     error::Error,
     handler::driver::DriverHandler,
     model::handler::{
-        PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest,
+        PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest, Task,
         TaskInstructionRequest,
     },
 };
 
 use super::{
     common::{
-        into_internal_server_err, validate_node, validation_err_into_grpc_err, ANCESTRY_SEPARATOR,
+        into_internal_server_err, validation_err_into_grpc_err, ValidationConfig,
+        ANCESTRY_SEPARATOR,
     },
     pb::{self, driver_server::Driver},
 };
@@ -40,6 +40,12 @@ impl DriverService {
 #[derive(Debug)]
 pub struct Config {
     pub message_expires_after: Duration,
+}
+
+impl ValidationConfig for Config {
+    fn message_expires_after(&self) -> &Duration {
+        &self.message_expires_after
+    }
 }
 
 #[tonic::async_trait]
@@ -184,91 +190,6 @@ impl TryFrom<(pb::PushTaskInsRequest, &Config)> for PushTaskInstructionsRequest 
                     }
                 };
 
-                let now = Utc::now().timestamp() as f64;
-                if task.created_at > now {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(created_at @ pb::Task)),
-                        description: format!(
-                            "Message was created in the future. now: {now}, created_at: {}",
-                            task.created_at
-                        ),
-                    });
-                }
-
-                if now - task.created_at > config.message_expires_after.as_secs_f64() {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(created_at @ pb::Task)),
-                        description: format!(
-                            "Message is too old. age: {} seconds",
-                            now - task.created_at
-                        ),
-                    });
-                }
-
-                if !task.delivered_at.is_empty() {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(delivered_at @ pb::Task)),
-                        description: "Must be empty".to_string(),
-                    });
-                }
-
-                if task.ttl <= 0. {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(ttl @ pb::Task)),
-                        description: "Must be higher than zero".to_string(),
-                    });
-                }
-
-                if task.pushed_at > now {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(pushed_at @ pb::Task)),
-                        description: format!(
-                            "Message was created in the future. now: {now}, created_at: {}",
-                            task.pushed_at
-                        ),
-                    });
-                }
-
-                let producer = match task.producer {
-                    Some(producer) => producer,
-                    None => {
-                        return Err(FieldViolation {
-                            field: format!("{}.{}", path, field!(producer @ pb::Task)),
-                            description: "Must not be empty.".to_string(),
-                        });
-                    }
-                };
-
-                let producer_path = format!("{}.{}", path, field!(producer @ pb::Task));
-                let field = format!("{}.{}", producer_path, field!(node_id @ pb::Node));
-                if producer.node_id != 0 {
-                    let violation = FieldViolation {
-                        field,
-                        description: "Is not 0.".to_string(),
-                    };
-                    return Err(violation);
-                }
-                if !producer.anonymous {
-                    let violation = FieldViolation {
-                        field,
-                        description: "Is not anonymous.".to_string(),
-                    };
-                    return Err(violation);
-                }
-
-                let consumer = match task.consumer {
-                    Some(consumer) => consumer,
-                    None => {
-                        return Err(FieldViolation {
-                            field: format!("{}.{}", path, field!(consumer @ pb::Task)),
-                            description: "Must not be empty.".to_string(),
-                        });
-                    }
-                };
-
-                let consumer_path = format!("{}.{}", path, field!(consumer @ pb::Task));
-                validate_node(&consumer, &consumer_path)?;
-
                 if !task.ancestry.is_empty() {
                     return Err(FieldViolation {
                         field: format!("{}.{}", path, field!(ancestry @ pb::Task)),
@@ -276,35 +197,16 @@ impl TryFrom<(pb::PushTaskInsRequest, &Config)> for PushTaskInstructionsRequest 
                     });
                 }
 
-                if task.task_type.is_empty() {
-                    return Err(FieldViolation {
-                        field: format!("{}.{}", path, field!(task_type @ pb::Task)),
-                        description: "Must not be empty.".to_string(),
-                    });
-                }
+                let task_ancestry = task.ancestry.clone().into_iter().join(ANCESTRY_SEPARATOR);
 
-                let recordset = match task.recordset {
-                    Some(recordset) => Message::encode_to_vec(&recordset),
-                    None => {
-                        return Err(FieldViolation {
-                            field: format!("{}.{}", path, field!(recordset @ pb::Task)),
-                            description: "Must not be empty.".to_string(),
-                        });
-                    }
-                };
+                let task: Task =
+                    (task, config as &dyn ValidationConfig, path.as_str()).try_into()?;
 
                 Ok(TaskInstructionRequest {
                     group_id: task_ins.group_id,
                     run_id: task_ins.run_id,
-                    producer: producer.into(),
-                    consumer: consumer.into(),
-                    created_at: task.created_at,
-                    delivered_at: task.delivered_at,
-                    published_at: task.pushed_at,
-                    ttl: task.ttl,
-                    ancestry: task.ancestry.into_iter().join(ANCESTRY_SEPARATOR),
-                    task_type: task.task_type,
-                    recordset,
+                    task,
+                    task_ancestry,
                 })
             })
             .collect::<Result<Vec<_>, _>>();
@@ -336,7 +238,7 @@ impl TryFrom<PullTaskResultResponse> for pb::TaskRes {
                 consumer: Some(value.consumer.into()),
                 created_at: value.created_at,
                 delivered_at: value.delivered_at,
-                pushed_at: value.published_at,
+                pushed_at: value.pushed_at,
                 ttl: value.ttl,
                 ancestry: value
                     .ancestry

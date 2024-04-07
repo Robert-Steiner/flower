@@ -1,13 +1,13 @@
 -- Add migration script here
 CREATE TABLE IF NOT EXISTS node(
-    node_id INTEGER UNIQUE,
-    online_until DOUBLE PRECISION,
-    ping_interval DOUBLE PRECISION
+    node_id BIGINT PRIMARY KEY,
+    online_until TIMESTAMPTZ,
+    ping_interval INTERVAL
 );
 CREATE INDEX IF NOT EXISTS idx_online_until ON node (online_until);
-CREATE TABLE IF NOT EXISTS run(run_id BIGINT UNIQUE);
+CREATE TABLE IF NOT EXISTS run(run_id BIGINT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS task_ins(
-    task_id TEXT UNIQUE,
+    task_id TEXT PRIMARY KEY,
     group_id TEXT,
     run_id BIGINT,
     producer_anonymous BOOLEAN,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS task_ins(
     FOREIGN KEY(run_id) REFERENCES run(run_id)
 );
 CREATE TABLE IF NOT EXISTS task_res(
-    task_id TEXT UNIQUE,
+    task_id TEXT PRIMARY KEY,
     group_id TEXT,
     run_id BIGINT,
     producer_anonymous BOOLEAN,

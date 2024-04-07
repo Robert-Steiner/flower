@@ -145,14 +145,6 @@ pub struct Fleet {
     )]
     pub max_encoding_message_size: usize,
 
-    /// The default ping interval in seconds.
-    #[arg(
-        id = "fleet-default-ping-interval",
-        long = "fleet-default-ping-interval",
-        default_value_t = 30
-    )]
-    pub default_ping_interval: u64,
-
     /// The allowed time offset in seconds of a fleet message based on message creation.
     #[arg(
         id = "fleet-message-expires-after",

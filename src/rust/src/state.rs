@@ -17,7 +17,7 @@ pub mod postgres;
 pub trait State: Sync + Send + Debug {
     async fn insert_task_instructions(
         &self,
-        instructions: &Vec<InsertTaskInstruction>,
+        instructions: &[InsertTaskInstruction],
     ) -> Result<(), Error>;
     async fn task_instructions(
         &self,

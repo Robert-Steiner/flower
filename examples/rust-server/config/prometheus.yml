@@ -6,4 +6,4 @@ scrape_configs:
   - job_name: "server_metrics"
     scrape_interval: 1s
     static_configs:
-      - targets: ["flwr_server:9000"]
+      - targets: ["flwr_superlink:9000"]

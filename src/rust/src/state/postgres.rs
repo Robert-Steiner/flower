@@ -54,7 +54,7 @@ impl State for Postgres {
     #[instrument(skip_all, level = "debug")]
     async fn insert_task_instructions(
         &self,
-        instructions: &Vec<InsertTaskInstruction>,
+        instructions: &[InsertTaskInstruction],
     ) -> Result<(), Error> {
         if instructions.is_empty() {
             return Ok(());
@@ -65,7 +65,7 @@ impl State for Postgres {
             instructions.iter().take(BIND_LIMIT / 14),
             |mut builder, instruction| {
                 builder
-                    .push_bind(instruction.id)
+                    .push_bind(instruction.id.as_simple().to_string())
                     .push_bind(&instruction.group_id)
                     .push_bind(instruction.run_id)
                     .push_bind(instruction.producer_anonymous)
@@ -74,7 +74,7 @@ impl State for Postgres {
                     .push_bind(instruction.consumer_node_id)
                     .push_bind(instruction.created_at)
                     .push_bind(&instruction.delivered_at)
-                    .push_bind(&instruction.published_at)
+                    .push_bind(instruction.pushed_at)
                     .push_bind(instruction.ttl)
                     .push_bind(&instruction.ancestry)
                     .push_bind(&instruction.task_type)
@@ -148,7 +148,7 @@ impl State for Postgres {
         sqlx::query(
             "INSERT INTO task_res VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);",
         )
-        .bind(result.id)
+        .bind(result.id.as_simple().to_string())
         .bind(&result.group_id)
         .bind(result.run_id)
         .bind(result.producer_anonymous)
@@ -157,7 +157,7 @@ impl State for Postgres {
         .bind(result.consumer_node_id)
         .bind(result.created_at)
         .bind(&result.delivered_at)
-        .bind(result.published_at)
+        .bind(result.pushed_at)
         .bind(result.ttl)
         .bind(&result.ancestry)
         .bind(&result.task_type)
@@ -341,7 +341,7 @@ impl FromRow<'_, PgRow> for TaskInstructionOrResult {
             consumer,
             created_at: row.try_get("created_at")?,
             delivered_at: row.try_get("delivered_at")?,
-            published_at: row.try_get("published_at")?,
+            pushed_at: row.try_get("pushed_at")?,
             ttl: row.try_get("ttl")?,
             ancestry: row.try_get("ancestry")?,
             task_type: row.try_get("task_type")?,

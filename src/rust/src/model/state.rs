@@ -23,7 +23,7 @@ pub struct TaskInstructionOrResult {
     pub consumer_anonymous: bool,
     pub created_at: f64,
     pub delivered_at: String,
-    pub published_at: f64,
+    pub pushed_at: f64,
     pub ttl: f64,
     pub ancestry: String,
     pub task_type: String,

@@ -1,8 +1,6 @@
 use std::{fmt::Debug, time::Duration};
 
-use chrono::Utc;
 use field::field;
-use itertools::Itertools;
 use prost::Message;
 use tonic::{Request, Response, Status};
 use tonic_types::ErrorDetails;
@@ -12,14 +10,15 @@ use crate::{
     error::Error,
     handler::fleet::FleetHandler,
     model::handler::{
-        AcknowledgePingRequest, DeleteNodeRequest, PullTaskInstructionsRequest,
+        AcknowledgePingRequest, CreateNodeRequest, DeleteNodeRequest, PullTaskInstructionsRequest,
         PullTaskInstructionsResult, PushTaskResultRequest,
     },
 };
 
 use super::{
     common::{
-        into_internal_server_err, validate_node, validation_err_into_grpc_err, ANCESTRY_SEPARATOR,
+        into_internal_server_err, validate_node, validation_err_into_grpc_err, ValidationConfig,
+        ANCESTRY_SEPARATOR,
     },
     pb::{self, fleet_server::Fleet},
 };
@@ -35,6 +34,12 @@ pub struct Config {
     pub message_expires_after: Duration,
 }
 
+impl ValidationConfig for Config {
+    fn message_expires_after(&self) -> &Duration {
+        &self.message_expires_after
+    }
+}
+
 impl FleetService {
     pub fn new(handler: FleetHandler, config: Config) -> Self {
         Self { handler, config }
@@ -46,11 +51,13 @@ impl Fleet for FleetService {
     #[instrument(skip_all)]
     async fn create_node(
         &self,
-        _request: Request<pb::CreateNodeRequest>,
+        request: Request<pb::CreateNodeRequest>,
     ) -> Result<Response<pb::CreateNodeResponse>, Status> {
+        let request = CreateNodeRequest::try_from(request.into_inner())
+            .map_err(validation_err_into_grpc_err)?;
         let node_id = self
             .handler
-            .create_node()
+            .create_node(request)
             .await
             .map_err(into_internal_server_err)?;
 
@@ -177,7 +184,7 @@ impl TryFrom<PullTaskInstructionsResult> for pb::TaskIns {
                 consumer: Some(value.consumer.into()),
                 created_at: value.created_at,
                 delivered_at: value.delivered_at,
-                pushed_at: value.published_at,
+                pushed_at: value.pushed_at,
                 ttl: value.ttl,
                 ancestry: value
                     .ancestry
@@ -219,156 +226,6 @@ impl TryFrom<pb::PullTaskInsRequest> for PullTaskInstructionsRequest {
     }
 }
 
-impl TryFrom<(pb::PushTaskResRequest, &Config)> for PushTaskResultRequest {
-    type Error = ErrorDetails;
-
-    fn try_from(
-        (mut request, config): (pb::PushTaskResRequest, &Config),
-    ) -> Result<Self, Self::Error> {
-        let mut err_details = ErrorDetails::new();
-
-        let path = field!(task_res_list @ pb::PushTaskResRequest);
-        let task_res = match request.task_res_list.len() {
-            count if count != 1 => {
-                err_details.add_bad_request_violation(
-                    path,
-                    format!("Must contain a single item but has {count}."),
-                );
-                return Err(err_details);
-            }
-            _ => request.task_res_list.pop().unwrap(),
-        };
-
-        if !task_res.task_id.is_empty() {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(task_id @ pb::TaskRes)),
-                "Must be empty.",
-            );
-        }
-
-        let path = format!("{}.{}", path, field!(task @ pb::TaskRes));
-        let task = match task_res.task {
-            Some(task) => task,
-            None => {
-                err_details.add_bad_request_violation(path, "Must not be empty.");
-                return Err(err_details);
-            }
-        };
-
-        let now = Utc::now().timestamp() as f64;
-        if task.created_at > now {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(created_at @ pb::Task)),
-                format!(
-                    "Message was created in the future. now: {now}, created_at: {}",
-                    task.created_at
-                ),
-            );
-        }
-
-        if now - task.created_at > config.message_expires_after.as_secs_f64() {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(created_at @ pb::Task)),
-                format!("Message is too old. age: {} seconds", now - task.created_at),
-            );
-        }
-
-        if !task.delivered_at.is_empty() {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(delivered_at @ pb::Task)),
-                "Must be empty.",
-            );
-        }
-
-        if task.pushed_at != 0. {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(pushed_at @ pb::Task)),
-                format!("Should not be set by client.",),
-            );
-        }
-
-        if task.ttl <= 0. {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(ttl @ pb::Task)),
-                "Must be higher than zero.",
-            );
-        }
-
-        let producer = match task.producer {
-            Some(producer) => producer,
-            None => {
-                err_details.add_bad_request_violation(
-                    format!("{}.{}", path, field!(producer @ pb::Task)),
-                    "Must not be empty.",
-                );
-                return Err(err_details);
-            }
-        };
-
-        let producer_path = format!("{}.{}", path, field!(producer @ pb::Task));
-        if let Err(violation) = validate_node(&producer, &producer_path) {
-            err_details.add_bad_request_violation(violation.field, violation.description);
-            return Err(err_details);
-        }
-
-        let consumer = match task.consumer {
-            Some(consumer) => consumer,
-            None => {
-                err_details.add_bad_request_violation(
-                    format!("{}.{}", path, field!(consumer @ pb::Task)),
-                    "Must not be empty.",
-                );
-                return Err(err_details);
-            }
-        };
-
-        let consumer_path = format!("{}.{}", path, field!(consumer @ pb::Task));
-        if let Err(violation) = validate_node(&consumer, &consumer_path) {
-            err_details.add_bad_request_violation(violation.field, violation.description);
-            return Err(err_details);
-        }
-
-        if !task.ancestry.is_empty() {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(ancestry @ pb::Task)),
-                "Must be empty.",
-            );
-        }
-
-        if task.task_type.is_empty() {
-            err_details.add_bad_request_violation(
-                format!("{}.{}", path, field!(task_type @ pb::Task)),
-                "Must not be empty.",
-            );
-        }
-
-        let recordset = match task.recordset {
-            Some(recordset) => Message::encode_to_vec(&recordset),
-            None => {
-                err_details.add_bad_request_violation(
-                    format!("{}.{}", path, field!(recordset @ pb::Task)),
-                    "Must not be empty.",
-                );
-                return Err(err_details);
-            }
-        };
-
-        Ok(Self {
-            id: task_res.task_id,
-            group_id: task_res.group_id,
-            run_id: task_res.run_id,
-            producer: producer.into(),
-            consumer: consumer.into(),
-            created_at: task.created_at,
-            delivered_at: task.delivered_at,
-            ttl: task.ttl,
-            ancestry: task.ancestry.into_iter().join(ANCESTRY_SEPARATOR),
-            task_type: task.task_type,
-            recordset,
-        })
-    }
-}
-
 impl TryFrom<pb::PingRequest> for AcknowledgePingRequest {
     type Error = ErrorDetails;
 
@@ -389,16 +246,53 @@ impl TryFrom<pb::PingRequest> for AcknowledgePingRequest {
             return Err(err_details);
         };
 
-        if value.ping_interval <= 0. {
+        let path = field!(ping_interval @ pb::PingRequest);
+        let Ok(ping_interval) = Duration::try_from_secs_f64(value.ping_interval) else {
             err_details.add_bad_request_violation(
                 format!("{}.{}", path, field!(ping_interval @ pb::PingRequest)),
-                "Must not be negative or zero.",
+                "Must not be negative, overflow or infinite.",
             );
+            return Err(err_details);
+        };
+
+        if ping_interval.is_zero() {
+            err_details.add_bad_request_violation(
+                format!("{}.{}", path, field!(ping_interval @ pb::PingRequest)),
+                "Must not be zero.",
+            );
+            return Err(err_details);
         }
 
         Ok(Self {
             node: node.into(),
-            ping_interval: value.ping_interval,
+            ping_interval,
         })
+    }
+}
+
+impl TryFrom<pb::CreateNodeRequest> for CreateNodeRequest {
+    type Error = ErrorDetails;
+
+    fn try_from(value: pb::CreateNodeRequest) -> Result<Self, Self::Error> {
+        let mut err_details = ErrorDetails::new();
+
+        let path = field!(ping_interval @ pb::CreateNodeRequest);
+        let Ok(ping_interval) = Duration::try_from_secs_f64(value.ping_interval) else {
+            err_details.add_bad_request_violation(
+                format!("{}.{}", path, field!(ping_interval @ pb::PingRequest)),
+                "Must not be negative, overflow or infinite.",
+            );
+            return Err(err_details);
+        };
+
+        if ping_interval.is_zero() {
+            err_details.add_bad_request_violation(
+                format!("{}.{}", path, field!(ping_interval @ pb::PingRequest)),
+                "Must not be zero.",
+            );
+            return Err(err_details);
+        }
+
+        Ok(Self { ping_interval })
     }
 }

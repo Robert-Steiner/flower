@@ -6,6 +6,7 @@ use figment::{
     Figment,
 };
 use flwr::{
+    auth::{noop, unauthorized::unauthorized},
     config::Config,
     error::Error,
     handler::{
@@ -13,7 +14,7 @@ use flwr::{
         fleet::{self, FleetHandler},
     },
     middleware::metrics::ServerMetricsLayer,
-    services::{
+    service::{
         self,
         driver::DriverService,
         fleet::FleetService,
@@ -30,7 +31,11 @@ use tokio::{
     signal::unix::{signal, SignalKind},
     sync::oneshot::{self},
 };
-use tonic::transport::{Body, Identity, Server, ServerTlsConfig};
+use tonic::{
+    server::NamedService,
+    transport::{Body, Identity, Server, ServerTlsConfig},
+};
+use tonic_health::pb::health_server::HealthServer;
 use tower::ServiceBuilder;
 use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
@@ -67,7 +72,7 @@ async fn main() -> Result<(), Error> {
     let driver_handler = DriverHandler::new(state.clone(), driver::Config {});
     let driver_svc = DriverService::new(
         driver_handler,
-        services::driver::Config {
+        service::driver::Config {
             message_expires_after: Duration::from_secs(config.driver.message_expires_after),
         },
     );
@@ -76,15 +81,10 @@ async fn main() -> Result<(), Error> {
         .max_encoding_message_size(config.driver.max_encoding_message_size);
 
     info!("Configure Fleet service");
-    let fleet_handler = FleetHandler::new(
-        state,
-        fleet::Config {
-            default_ping_interval: Duration::from_secs(config.fleet.default_ping_interval),
-        },
-    );
+    let fleet_handler = FleetHandler::new(state, fleet::Config {});
     let fleet_svc = FleetService::new(
         fleet_handler,
-        services::fleet::Config {
+        service::fleet::Config {
             message_expires_after: Duration::from_secs(config.fleet.message_expires_after),
         },
     );
@@ -92,12 +92,12 @@ async fn main() -> Result<(), Error> {
         .max_decoding_message_size(config.fleet.max_decoding_message_size)
         .max_encoding_message_size(config.fleet.max_encoding_message_size);
 
+    let a = <FleetServer<FleetService>>::NAME;
+    let b = <HealthServer<tonic_health::server::HealthService>>::NAME;
+
     let middleware = ServiceBuilder::new()
         // https://docs.rs/tower-http/0.4.4/tower_http/metrics/in_flight_requests/index.html
         .layer(ServerMetricsLayer)
-        .layer(AsyncRequireAuthorizationLayer::new(
-            |request: http::Request<Body>| async move { Ok(request) },
-        ))
         .layer(SetSensitiveHeadersLayer::new(once(AUTHORIZATION)))
         .set_x_request_id(MakeRequestUuid)
         .layer(
@@ -106,6 +106,7 @@ async fn main() -> Result<(), Error> {
                 .on_response(DefaultOnResponse::new())
                 .on_failure(DefaultOnFailure::new()),
         )
+        .layer(AsyncRequireAuthorizationLayer::new(noop::noop))
         .propagate_x_request_id()
         .into_inner();
 

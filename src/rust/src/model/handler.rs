@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use uuid::Uuid;
 
@@ -10,14 +10,14 @@ pub enum Node {
 
 #[derive(Debug)]
 pub struct TaskInstructionOrResult {
-    pub id: String,
+    pub id: String, //convert to uuid
     pub group_id: String,
     pub run_id: i64,
     pub producer: Node,
     pub consumer: Node,
     pub created_at: f64,
     pub delivered_at: String,
-    pub published_at: f64,
+    pub pushed_at: f64,
     pub ttl: f64,
     pub ancestry: String,
     pub task_type: String,
@@ -28,20 +28,16 @@ pub type PullTaskInstructionsResult = TaskInstructionOrResult;
 pub type PullTaskResultResponse = TaskInstructionOrResult;
 
 #[derive(Debug)]
-pub struct PushTaskResultRequest {
-    pub id: String,
+pub struct NewTaskInstructionOrResult {
+    // no task id
     pub group_id: String,
     pub run_id: i64,
-    pub producer: Node,
-    pub consumer: Node,
-    pub created_at: f64,
-    pub delivered_at: String,
-    // no published at
-    pub ttl: f64,
-    pub ancestry: String,
-    pub task_type: String,
-    pub recordset: Vec<u8>,
+    pub task_ancestry: String,
+    pub task: Task,
 }
+
+pub type PushTaskResultRequest = NewTaskInstructionOrResult;
+pub type TaskInstructionRequest = NewTaskInstructionOrResult;
 
 #[derive(Debug)]
 pub struct PullTaskInstructionsRequest {
@@ -52,22 +48,6 @@ pub struct PullTaskInstructionsRequest {
 #[derive(Debug)]
 pub struct PushTaskInstructionsRequest {
     pub instructions: Vec<TaskInstructionRequest>,
-}
-
-#[derive(Debug)]
-pub struct TaskInstructionRequest {
-    // no id
-    pub group_id: String,
-    pub run_id: i64,
-    pub producer: Node,
-    pub consumer: Node,
-    pub created_at: f64,
-    pub delivered_at: String,
-    pub published_at: f64,
-    pub ttl: f64,
-    pub ancestry: String,
-    pub task_type: String,
-    pub recordset: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -83,5 +63,34 @@ pub struct DeleteNodeRequest {
 #[derive(Debug)]
 pub struct AcknowledgePingRequest {
     pub node: Node,
-    pub ping_interval: f64,
+    pub ping_interval: Duration,
+}
+
+#[derive(Debug)]
+pub struct CreateNodeRequest {
+    pub ping_interval: Duration,
+}
+
+#[derive(Debug)]
+pub struct Error {
+    pub code: i64,
+    pub reason: String,
+}
+
+#[derive(Debug)]
+pub enum Result {
+    Error(Error),
+    RecordSet(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub struct Task {
+    pub producer: Node,
+    pub consumer: Node,
+    pub created_at: f64,
+    pub delivered_at: String,
+    pub ttl: f64,
+    // pub ancestry: String,
+    pub task_type: String,
+    pub result: Result,
 }

@@ -1,4 +1,4 @@
-flwr@git+https://github.com/adap/flower.git@ce145d08f3f79f5181bf1b11baf0b811d9f87cb1
+flwr@git+https://github.com/adap/flower.git@2f8f9e51cefb60add9c9e53aeab898add1099eaa
 torch==1.13.1
 torchvision==0.14.1
 tqdm==4.65.0

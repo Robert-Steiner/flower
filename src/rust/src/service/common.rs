@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, time::Duration};
 
 use field::field;
 use tonic::{Code, Status};
@@ -69,4 +69,8 @@ impl From<pb::Node> for Node {
             false => Self::Id(value.node_id),
         }
     }
+}
+
+pub trait ValidationConfig {
+    fn message_expires_after(&self) -> &Duration;
 }
