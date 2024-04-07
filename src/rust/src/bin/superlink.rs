@@ -1,27 +1,18 @@
 use std::{iter::once, time::Duration};
 
-use clap::Parser;
-use figment::{
-    providers::{Env, Format, Serialized, Yaml},
-    Figment,
-};
 use flwr::{
-    auth::{noop, unauthorized::unauthorized},
-    config::Config,
+    auth::noop,
+    config::read_config,
     error::Error,
-    handler::{
-        driver::{self, DriverHandler},
-        fleet::{self, FleetHandler},
-    },
     middleware::metrics::ServerMetricsLayer,
+    server::{new_driver_server, new_fleet_server},
     service::{
-        self,
         driver::DriverService,
         fleet::FleetService,
         pb::{driver_server::DriverServer, fleet_server::FleetServer},
     },
     state::postgres::Postgres,
-    tracer,
+    tracing::{init_tracing, tracing_span},
 };
 use garde::Validate;
 use http::header::AUTHORIZATION;
@@ -31,11 +22,7 @@ use tokio::{
     signal::unix::{signal, SignalKind},
     sync::oneshot::{self},
 };
-use tonic::{
-    server::NamedService,
-    transport::{Body, Identity, Server, ServerTlsConfig},
-};
-use tonic_health::pb::health_server::HealthServer;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tower::ServiceBuilder;
 use tower_http::{
     auth::AsyncRequireAuthorizationLayer,
@@ -44,9 +31,7 @@ use tower_http::{
     trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer},
     ServiceBuilderExt,
 };
-use tracing::{debug, info, Span};
-use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing::{debug, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -69,31 +54,10 @@ async fn main() -> Result<(), Error> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
     info!("Configure Driver service");
-    let driver_handler = DriverHandler::new(state.clone(), driver::Config {});
-    let driver_svc = DriverService::new(
-        driver_handler,
-        service::driver::Config {
-            message_expires_after: Duration::from_secs(config.driver.message_expires_after),
-        },
-    );
-    let driver = DriverServer::new(driver_svc)
-        .max_decoding_message_size(config.driver.max_decoding_message_size)
-        .max_encoding_message_size(config.driver.max_encoding_message_size);
+    let driver = new_driver_server(&config.driver, state.clone());
 
     info!("Configure Fleet service");
-    let fleet_handler = FleetHandler::new(state, fleet::Config {});
-    let fleet_svc = FleetService::new(
-        fleet_handler,
-        service::fleet::Config {
-            message_expires_after: Duration::from_secs(config.fleet.message_expires_after),
-        },
-    );
-    let fleet = FleetServer::new(fleet_svc)
-        .max_decoding_message_size(config.fleet.max_decoding_message_size)
-        .max_encoding_message_size(config.fleet.max_encoding_message_size);
-
-    let a = <FleetServer<FleetService>>::NAME;
-    let b = <HealthServer<tonic_health::server::HealthService>>::NAME;
+    let fleet = new_fleet_server(&config.fleet, state);
 
     let middleware = ServiceBuilder::new()
         // https://docs.rs/tower-http/0.4.4/tower_http/metrics/in_flight_requests/index.html
@@ -172,63 +136,4 @@ async fn wait_for_signal(tx: oneshot::Sender<()>) {
     }
 
     let _ = tx.send(());
-}
-
-fn read_config() -> Result<Config, Error> {
-    let cli = Config::parse();
-    let mut figment = Figment::new().merge(Serialized::defaults(&cli));
-    if let Some(file) = cli.config.as_ref() {
-        figment = figment.merge(Yaml::file_exact(file));
-    }
-    figment
-        .merge(Env::prefixed("FLWR_").split("__"))
-        .extract()
-        .map_err(Into::into)
-}
-
-fn init_tracing(config: &Config) -> Result<(), Error> {
-    let mut subscribers = Vec::new();
-
-    match config.logging.fmt {
-        flwr::config::Format::Json => subscribers.push(fmt::layer().json().boxed()),
-        flwr::config::Format::Text => subscribers.push(fmt::layer().boxed()),
-    }
-
-    if config.tracer.enabled {
-        let tracer = tracer::install(&config.tracer)?;
-        subscribers.push(OpenTelemetryLayer::new(tracer).boxed());
-    }
-
-    tracing_subscriber::registry()
-        .with(subscribers)
-        .with(EnvFilter::from(&config.logging.level))
-        .init();
-    Ok(())
-}
-
-fn tracing_span(request: &http::Request<Body>, verbose: bool) -> Span {
-    let request_id = request
-        .headers()
-        .get("x-request-id")
-        .map(|v| v.to_str().unwrap_or_default())
-        .unwrap_or_default();
-
-    if verbose {
-        tracing::info_span!(
-            "request",
-            method = %request.method(),
-            uri = %request.uri(),
-            version = ?request.version(),
-            headers = ?request.headers(),
-            request_id = request_id
-        )
-    } else {
-        tracing::info_span!(
-            "request",
-            method = %request.method(),
-            uri = %request.uri(),
-            version = ?request.version(),
-            request_id = request_id
-        )
-    }
 }

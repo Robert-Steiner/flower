@@ -4,7 +4,25 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
+use figment::{
+    providers::{Env, Format as _, Serialized, Yaml},
+    Figment,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::error::Error;
+
+pub fn read_config() -> Result<Config, Error> {
+    let cli = Config::parse();
+    let mut figment = Figment::new().merge(Serialized::defaults(&cli));
+    if let Some(file) = cli.config.as_ref() {
+        figment = figment.merge(Yaml::file_exact(file));
+    }
+    figment
+        .merge(Env::prefixed("FLWR_").split("__"))
+        .extract()
+        .map_err(Into::into)
+}
 
 /// Flower Superlink
 #[derive(Parser, Debug, Serialize, Deserialize, garde::Validate)]
@@ -190,3 +208,6 @@ pub struct Database {
     #[garde(required)]
     pub uri: Option<String>,
 }
+
+// let a = <FleetServer<FleetService>>::NAME;
+// let b = <HealthServer<tonic_health::server::HealthService>>::NAME;
