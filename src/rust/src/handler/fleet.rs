@@ -6,15 +6,12 @@ use tracing::{info, instrument};
 
 use crate::{
     error::Error,
-    handler::common::{new_id, new_task_instruction_or_result},
-    model::{
-        handler::{
-            AcknowledgePingRequest, CreateNodeRequest, DeleteNodeRequest, Node,
-            PullTaskInstructionsRequest, PullTaskInstructionsResult, PushTaskResultRequest,
-        },
-        state::{InsertNode, UpdatePing},
+    handler::common::{new_id, new_task_result},
+    model::handler::{
+        AcknowledgePingRequest, CreateNodeRequest, DeleteNodeRequest, Node as HandlerNode,
+        PullTaskInstructionsRequest, PullTaskInstructionsResult, PushTaskResultRequest,
     },
-    state::State,
+    state::{models::Node, State},
 };
 
 #[derive(Debug)]
@@ -34,10 +31,10 @@ impl FleetHandler {
 
     #[instrument(skip_all, level = "debug")]
     pub async fn create_node(&self, request: CreateNodeRequest) -> Result<i64, Error> {
-        let node = InsertNode {
+        let node = Node {
             id: new_id(),
             online_until: Utc::now() + request.ping_interval,
-            ping_interval: request.ping_interval,
+            ping_interval: request.ping_interval.as_secs_f64(),
         };
         self.state.insert_node(&node).await?;
         info!(node_id = node.id);
@@ -46,7 +43,7 @@ impl FleetHandler {
 
     #[instrument(skip_all, level = "debug")]
     pub async fn delete_node(&self, request: &DeleteNodeRequest) -> Result<(), Error> {
-        if let Node::Id(id) = request.node {
+        if let HandlerNode::Id(id) = request.node {
             self.state.delete_node(id).await?;
             info!(node_id = id);
         }
@@ -78,7 +75,7 @@ impl FleetHandler {
         &self,
         request: PushTaskResultRequest,
     ) -> Result<HashMap<String, u32>, Error> {
-        let (task_id, task_result) = new_task_instruction_or_result(request);
+        let (task_id, task_result) = new_task_result(request);
 
         self.state.insert_task_result(&task_result).await?;
 
@@ -94,10 +91,10 @@ impl FleetHandler {
     pub async fn acknowledge_ping(&self, request: &AcknowledgePingRequest) -> Result<bool, Error> {
         let (node_id, _) = (&request.node).into();
         self.state
-            .update_ping(&UpdatePing {
+            .update_ping(&Node {
                 id: node_id,
                 online_until: Utc::now() + request.ping_interval,
-                ping_interval: request.ping_interval,
+                ping_interval: request.ping_interval.as_secs_f64(),
             })
             .await
     }

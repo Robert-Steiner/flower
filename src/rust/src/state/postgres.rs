@@ -1,51 +1,35 @@
 use std::collections::HashSet;
 
 use async_trait::async_trait;
-use chrono::Utc;
-use futures::TryStreamExt;
-use sqlx::{
-    postgres::{PgPoolOptions, PgRow},
-    FromRow, Pool, QueryBuilder, Row,
-};
-use tracing::instrument;
+use chrono::{DateTime, Utc};
+use diesel::{debug_query, ExpressionMethods, QueryDsl};
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{pooled_connection::bb8::Pool, AsyncPgConnection};
+use diesel_async::{AsyncConnection, RunQueryDsl};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::{
     error::Error,
-    model::{
-        handler::{
-            Node, PullTaskInstructionsResult, PullTaskResultResponse, TaskInstructionOrResult,
-        },
-        state::{InsertNode, InsertTaskInstruction, InsertTaskResult, UpdatePing},
-    },
+    model::handler::{Node as HandlerNode, PullTaskInstructionsResult, PullTaskResultResponse},
+    state::schema,
 };
 
-use super::State;
-
-const BIND_LIMIT: usize = 32766;
+use super::models::{TaskInstruction, TaskResult};
+use super::{models::Node, State};
 
 #[derive(Debug, Clone)]
 pub struct Postgres {
-    pool: Pool<sqlx::Postgres>,
+    pool: Pool<AsyncPgConnection>,
 }
 
 impl Postgres {
     #[instrument(skip_all, level = "debug")]
     pub async fn new(uri: &str) -> Result<Self, Error> {
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .min_connections(5)
-            .connect(uri)
-            .await?;
+        let mgr = AsyncDieselConnectionManager::<AsyncPgConnection>::new(uri);
+        let pool = Pool::builder().build(mgr).await?;
         Ok(Self { pool })
-    }
-
-    #[instrument(skip_all)]
-    pub async fn migrate(&self) -> Result<(), Error> {
-        sqlx::migrate!("src/state/migrations")
-            .run(&self.pool)
-            .await?;
-        Ok(())
     }
 }
 
@@ -54,117 +38,88 @@ impl State for Postgres {
     #[instrument(skip_all, level = "debug")]
     async fn insert_task_instructions(
         &self,
-        instructions: &[InsertTaskInstruction],
+        instructions: &[TaskInstruction],
     ) -> Result<(), Error> {
         if instructions.is_empty() {
             return Ok(());
         }
 
-        let mut query_builder = QueryBuilder::new("INSERT INTO task_ins ");
-        query_builder.push_values(
-            instructions.iter().take(BIND_LIMIT / 14),
-            |mut builder, instruction| {
-                builder
-                    .push_bind(instruction.id.as_simple().to_string())
-                    .push_bind(&instruction.group_id)
-                    .push_bind(instruction.run_id)
-                    .push_bind(instruction.producer_anonymous)
-                    .push_bind(instruction.producer_node_id)
-                    .push_bind(instruction.consumer_anonymous)
-                    .push_bind(instruction.consumer_node_id)
-                    .push_bind(instruction.created_at)
-                    .push_bind(&instruction.delivered_at)
-                    .push_bind(instruction.pushed_at)
-                    .push_bind(instruction.ttl)
-                    .push_bind(&instruction.ancestry)
-                    .push_bind(&instruction.task_type)
-                    .push_bind(&instruction.recordset);
-            },
-        );
+        use self::schema::task_ins::dsl::*;
+        let mut conn = self.pool.get().await?;
 
-        let query = query_builder.build();
-        query.persistent(false).execute(&self.pool).await?;
+        let query = diesel::insert_into(task_ins).values(instructions);
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        query.execute(&mut conn).await?;
         Ok(())
     }
 
     #[instrument(skip_all, level = "debug")]
     async fn task_instructions(
         &self,
-        node: &Node,
+        node: &HandlerNode,
         limit: u32,
     ) -> Result<Vec<PullTaskInstructionsResult>, Error> {
-        let mut tx = self.pool.begin().await?;
+        unimplemented!()
+        // let mut tx = self.pool.begin().await?;
 
-        let mut query_builder = QueryBuilder::new("SELECT task_id FROM task_ins ");
+        // let mut query_builder = QueryBuilder::new("SELECT task_id FROM task_ins ");
 
-        match node {
-            Node::Id(id) => query_builder
-                .push("WHERE consumer_anonymous IS FALSE AND consumer_node_id = ")
-                .push_bind(id),
-            Node::Anonymous => {
-                query_builder.push("WHERE consumer_anonymous IS TRUE AND consumer_node_id = 0")
-            }
-        };
+        // match node {
+        //     Node::Id(id) => query_builder
+        //         .push("WHERE consumer_anonymous IS FALSE AND consumer_node_id = ")
+        //         .push_bind(id),
+        //     Node::Anonymous => {
+        //         query_builder.push("WHERE consumer_anonymous IS TRUE AND consumer_node_id = 0")
+        //     }
+        // };
 
-        query_builder.push(" AND delivered_at = ''");
-        if limit > 0 {
-            query_builder.push(" LIMIT ").push_bind(limit as i64);
-        }
-        query_builder.push(";");
+        // query_builder.push(" AND delivered_at = ''");
+        // if limit > 0 {
+        //     query_builder.push(" LIMIT ").push_bind(limit as i64);
+        // }
+        // query_builder.push(";");
 
-        let query = query_builder.build();
-        let task_ids: Vec<String> = query
-            .try_map(|row: PgRow| row.try_get::<String, _>("task_id"))
-            .fetch_all(&mut *tx)
-            .await?;
+        // let query = query_builder.build();
+        // let task_ids: Vec<String> = query
+        //     .try_map(|row: PgRow| row.try_get::<String, _>("task_id"))
+        //     .fetch_all(&mut *tx)
+        //     .await?;
 
-        if task_ids.is_empty() {
-            Ok(Vec::new())
-        } else {
-            let delivered_at = Utc::now();
-            let mut query_builder = QueryBuilder::new("UPDATE task_ins SET delivered_at = ");
-            query_builder
-                .push_bind(delivered_at.to_rfc3339())
-                .push(" WHERE task_id IN (");
-            let mut separated = query_builder.separated(", ");
-            for value_type in task_ids.iter() {
-                separated.push_bind(value_type);
-            }
-            separated.push_unseparated(") RETURNING *;");
+        // if task_ids.is_empty() {
+        //     Ok(Vec::new())
+        // } else {
+        //     let delivered_at = Utc::now();
+        //     let mut query_builder = QueryBuilder::new("UPDATE task_ins SET delivered_at = ");
+        //     query_builder
+        //         .push_bind(delivered_at.to_rfc3339())
+        //         .push(" WHERE task_id IN (");
+        //     let mut separated = query_builder.separated(", ");
+        //     for value_type in task_ids.iter() {
+        //         separated.push_bind(value_type);
+        //     }
+        //     separated.push_unseparated(") RETURNING *;");
 
-            let query = query_builder.build();
-            let task_ins = query
-                .persistent(false)
-                .try_map(|row| PullTaskInstructionsResult::from_row(&row))
-                .fetch_all(&mut *tx)
-                .await?;
-            tx.commit().await?;
-            Ok(task_ins)
-        }
+        //     let query = query_builder.build();
+        //     let task_ins = query
+        //         .persistent(false)
+        //         .try_map(|row| PullTaskInstructionsResult::from_row(&row))
+        //         .fetch_all(&mut *tx)
+        //         .await?;
+        //     tx.commit().await?;
+        //     Ok(task_ins)
+        // }
     }
 
     #[instrument(skip_all, level = "debug")]
-    async fn insert_task_result(&self, result: &InsertTaskResult) -> Result<(), Error> {
-        sqlx::query(
-            "INSERT INTO task_res VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);",
-        )
-        .bind(result.id.as_simple().to_string())
-        .bind(&result.group_id)
-        .bind(result.run_id)
-        .bind(result.producer_anonymous)
-        .bind(result.producer_node_id)
-        .bind(result.consumer_anonymous)
-        .bind(result.consumer_node_id)
-        .bind(result.created_at)
-        .bind(&result.delivered_at)
-        .bind(result.pushed_at)
-        .bind(result.ttl)
-        .bind(&result.ancestry)
-        .bind(&result.task_type)
-        .bind(&result.recordset)
-        .execute(&self.pool)
-        .await?;
+    async fn insert_task_result(&self, result: &TaskResult) -> Result<(), Error> {
+        use self::schema::task_res::dsl::*;
+        let mut conn = self.pool.get().await?;
 
+        let query = diesel::insert_into(task_res).values(result);
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        query.execute(&mut conn).await?;
         Ok(())
     }
 
@@ -174,187 +129,171 @@ impl State for Postgres {
         ids: &HashSet<Uuid>,
         limit: Option<u32>,
     ) -> Result<Vec<PullTaskResultResponse>, Error> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
+        unimplemented!()
+        // if ids.is_empty() {
+        //     return Ok(Vec::new());
+        // }
 
-        let mut tx = self.pool.begin().await?;
+        // let mut tx = self.pool.begin().await?;
 
-        let mut query_builder = QueryBuilder::new("SELECT * FROM task_res WHERE ancestry IN (");
-        let mut separated = query_builder.separated(", ");
-        for id in ids.iter() {
-            separated.push_bind(id.as_simple().to_string());
-        }
-        separated.push_unseparated(") AND delivered_at = ''");
+        // let mut query_builder = QueryBuilder::new("SELECT * FROM task_res WHERE ancestry IN (");
+        // let mut separated = query_builder.separated(", ");
+        // for id in ids.iter() {
+        //     separated.push_bind(id.as_simple().to_string());
+        // }
+        // separated.push_unseparated(") AND delivered_at = ''");
 
-        if let Some(limit) = limit {
-            separated
-                .push_unseparated(" LIMIT ")
-                .push_bind_unseparated(limit as i64);
-        }
-        separated.push_unseparated(";");
+        // if let Some(limit) = limit {
+        //     separated
+        //         .push_unseparated(" LIMIT ")
+        //         .push_bind_unseparated(limit as i64);
+        // }
+        // separated.push_unseparated(";");
 
-        let query = query_builder.build();
-        let task_res = query
-            .persistent(false)
-            .try_map(|row| PullTaskResultResponse::from_row(&row))
-            .fetch_all(&mut *tx)
-            .await?;
+        // let query = query_builder.build();
+        // let task_res = query
+        //     .persistent(false)
+        //     .try_map(|row| PullTaskResultResponse::from_row(&row))
+        //     .fetch_all(&mut *tx)
+        //     .await?;
 
-        if task_res.is_empty() {
-            Ok(Vec::new())
-        } else {
-            let delivered_at = Utc::now();
-            let mut query_builder = QueryBuilder::new("UPDATE task_res SET delivered_at = ");
-            query_builder
-                .push_bind(delivered_at.to_rfc3339())
-                .push(" WHERE task_id IN (");
-            let mut separated = query_builder.separated(", ");
-            for value_type in task_res.iter() {
-                separated.push_bind(&value_type.id);
-            }
-            separated.push_unseparated(") RETURNING *;");
+        // if task_res.is_empty() {
+        //     Ok(Vec::new())
+        // } else {
+        //     let delivered_at = Utc::now();
+        //     let mut query_builder = QueryBuilder::new("UPDATE task_res SET delivered_at = ");
+        //     query_builder
+        //         .push_bind(delivered_at.to_rfc3339())
+        //         .push(" WHERE task_id IN (");
+        //     let mut separated = query_builder.separated(", ");
+        //     for value_type in task_res.iter() {
+        //         separated.push_bind(&value_type.id);
+        //     }
+        //     separated.push_unseparated(") RETURNING *;");
 
-            let query = query_builder.build();
-            query.persistent(false).execute(&mut *tx).await?;
-            tx.commit().await?;
-            Ok(task_res)
-        }
+        //     let query = query_builder.build();
+        //     query.persistent(false).execute(&mut *tx).await?;
+        //     tx.commit().await?;
+        //     Ok(task_res)
+        // }
     }
 
     #[instrument(skip_all, level = "debug")]
     async fn delete_tasks(&self, ids: HashSet<Uuid>) -> Result<(), Error> {
-        let mut tx = self.pool.begin().await?;
+        use self::schema::task_ins;
+        use self::schema::task_res;
+        let mut conn = self.pool.get().await?;
 
-        let mut query_builder = QueryBuilder::new(
-            "DELETE FROM task_ins WHERE delivered_at != '' AND task_id IN (SELECT ancestry FROM task_res WHERE ancestry IN (",
-        );
-        let mut separated = query_builder.separated(", ");
-        for id in ids.iter() {
-            separated.push_bind(id.as_simple().to_string());
-        }
-        separated.push_unseparated(") AND delivered_at != '');");
+        conn.transaction::<_, diesel::result::Error, _>(|conn| {
+            async move {
+                let ids = ids.iter().map(|uuid| uuid.as_simple().to_string());
+                let inner_query = task_res::table
+                    .select(task_res::ancestry)
+                    .filter(task_res::ancestry.eq_any(ids.clone()))
+                    .filter(task_res::delivered_at.ne(""));
 
-        let query = query_builder.build();
-        query.persistent(false).execute(&mut *tx).await?;
+                let query = diesel::delete(task_ins::table)
+                    .filter(task_ins::delivered_at.ne("")) // #TODO use nullable
+                    .filter(task_ins::id.eq_any(inner_query));
+                debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                query.execute(conn).await?;
 
-        let mut query_builder = QueryBuilder::new("DELETE FROM task_res WHERE ancestry IN (");
-        let mut separated = query_builder.separated(", ");
-        for id in ids.iter() {
-            separated.push_bind(id.as_simple().to_string());
-        }
-        separated.push_unseparated(") AND delivered_at != '';");
+                // #TODO use fk with delete on cascade
+                let query = diesel::delete(task_res::table)
+                    .filter(task_res::ancestry.eq_any(ids))
+                    .filter(task_res::delivered_at.ne(""));
 
-        let query = query_builder.build();
-        query.persistent(false).execute(&mut *tx).await?;
+                debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                query.execute(conn).await?;
 
-        tx.commit().await?;
+                Ok(())
+            }
+            .scope_boxed()
+        })
+        .await?;
+
         Ok(())
     }
 
     #[instrument(skip_all, level = "debug")]
-    async fn insert_node(&self, node: &InsertNode) -> Result<(), Error> {
-        sqlx::query("INSERT INTO node VALUES ($1, $2, $3);")
-            .bind(node.id)
-            .bind(node.online_until)
-            .bind(node.ping_interval)
-            .execute(&self.pool)
-            .await?;
+    async fn insert_node(&self, new_node: &Node) -> Result<(), Error> {
+        use self::schema::node::dsl::*;
+        let mut conn = self.pool.get().await?;
+
+        let query = diesel::insert_into(node).values(new_node);
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        query.execute(&mut conn).await?;
         Ok(())
     }
 
     #[instrument(skip_all, level = "debug")]
     async fn delete_node(&self, node_id: i64) -> Result<(), Error> {
-        sqlx::query("DELETE FROM node WHERE node_id = $1;")
-            .bind(node_id)
-            .execute(&self.pool)
-            .await?;
+        use self::schema::node::dsl::*;
+        let mut conn = self.pool.get().await?;
+
+        let query = diesel::delete(node.filter(id.eq(node_id)));
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+        query.execute(&mut conn).await?;
         Ok(())
     }
 
     #[instrument(skip_all, level = "debug")]
-    async fn nodes(&self, run_id: i64) -> Result<HashSet<i64>, Error> {
-        let mut tx = self.pool.begin().await?;
+    async fn nodes(&self, run_id: i64, timestamp: DateTime<Utc>) -> Result<HashSet<i64>, Error> {
+        use self::schema::run;
+        let mut conn = self.pool.get().await?;
 
-        let (count,) = sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM run WHERE run_id = $1;")
-            .bind(run_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        let query = run::table.filter(run::id.eq(run_id)).count();
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+        let number_of_runs = query.get_result::<i64>(&mut conn).await?;
 
-        if count == 0 {
+        if number_of_runs == 0 {
             return Ok(HashSet::new());
         }
 
-        let nodes: HashSet<i64> = sqlx::query_scalar::<_, i64>("SELECT node_id FROM node;")
-            .fetch(&mut *tx)
-            .try_collect()
-            .await?;
-        tx.commit().await?;
-        Ok(nodes)
+        use self::schema::node;
+        let query = node::table
+            .select(node::id)
+            .filter(node::online_until.ge(timestamp));
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        let nodes = query.load::<i64>(&mut conn).await?;
+        return Ok(HashSet::from_iter(nodes.into_iter()));
     }
 
     #[instrument(skip_all, level = "debug")]
     async fn insert_run(&self, run_id: i64) -> Result<(), Error> {
-        sqlx::query("INSERT INTO run VALUES ($1);")
-            .bind(run_id)
-            .execute(&self.pool)
-            .await?;
+        use self::schema::run::dsl::*;
+        let mut conn = self.pool.get().await?;
+
+        let query = diesel::insert_into(run).values(id.eq(run_id));
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        query.execute(&mut conn).await?;
         Ok(())
     }
 
     #[instrument(skip_all, level = "debug")]
-    async fn update_ping(&self, ping: &UpdatePing) -> Result<bool, Error> {
-        let res = sqlx::query(
-            "UPDATE node SET online_until = $1, ping_interval = $2 WHERE node_id = $3;",
-        )
-        .bind(ping.online_until)
-        .bind(ping.ping_interval)
-        .bind(ping.id)
-        .execute(&self.pool)
-        .await;
+    async fn update_ping(&self, ping: &Node) -> Result<bool, Error> {
+        use self::schema::node::dsl::*;
+        let mut conn = self.pool.get().await?;
 
+        let query = diesel::update(node).set(ping);
+        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+
+        let res = query.execute(&mut conn).await?;
         match res {
-            Err(sqlx::Error::RowNotFound) => Ok(false),
-            Ok(_) => Ok(true),
-            Err(err) => Err(err.into()),
+            0 => Ok(false),
+            _ => Ok(true),
         }
     }
 }
 
-impl FromRow<'_, PgRow> for TaskInstructionOrResult {
-    fn from_row(row: &PgRow) -> sqlx::Result<Self> {
-        let producer = match row.try_get("producer_anonymous")? {
-            true => Node::Anonymous,
-            false => Node::Id(row.try_get("producer_node_id")?),
-        };
-
-        let consumer = match row.try_get("consumer_anonymous")? {
-            true => Node::Anonymous,
-            false => Node::Id(row.try_get("consumer_node_id")?),
-        };
-
-        Ok(Self {
-            id: row.try_get("task_id")?,
-            group_id: row.try_get("group_id")?,
-            run_id: row.try_get("run_id")?,
-            producer,
-            consumer,
-            created_at: row.try_get("created_at")?,
-            delivered_at: row.try_get("delivered_at")?,
-            pushed_at: row.try_get("pushed_at")?,
-            ttl: row.try_get("ttl")?,
-            ancestry: row.try_get("ancestry")?,
-            task_type: row.try_get("task_type")?,
-            recordset: row.try_get("recordset")?,
-        })
-    }
-}
-
-impl From<&Node> for (i64, bool) {
-    fn from(value: &Node) -> Self {
+impl From<&HandlerNode> for (i64, bool) {
+    fn from(value: &HandlerNode) -> Self {
         match value {
-            Node::Id(id) => (*id, false),
-            Node::Anonymous => (0, true),
+            HandlerNode::Id(id) => (*id, false),
+            HandlerNode::Anonymous => (0, true),
         }
     }
 }

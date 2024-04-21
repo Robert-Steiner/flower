@@ -5,9 +5,9 @@ use rand::{
 };
 use uuid::Uuid;
 
-use crate::model::{
-    handler::{self, NewTaskInstructionOrResult},
-    state::TaskInstructionOrResult,
+use crate::{
+    model::handler::{self, NewTaskInstructionOrResult},
+    state::models::{TaskInstruction, TaskResult},
 };
 
 pub fn new_id() -> i64 {
@@ -40,9 +40,7 @@ pub fn new_id() -> i64 {
     rng.sample(&dist)
 }
 
-pub(super) fn new_task_instruction_or_result(
-    request: NewTaskInstructionOrResult,
-) -> (Uuid, TaskInstructionOrResult) {
+pub(super) fn new_task_instruction(request: NewTaskInstructionOrResult) -> (Uuid, TaskInstruction) {
     if let handler::Result::RecordSet(recordset) = request.task.result {
         let id = Uuid::new_v4();
         let pushed_at = Utc::now().timestamp() as f64;
@@ -50,8 +48,38 @@ pub(super) fn new_task_instruction_or_result(
         let (consumer_node_id, consumer_anonymous) = (&request.task.consumer).into();
         (
             id,
-            TaskInstructionOrResult {
-                id,
+            TaskInstruction {
+                id: id.as_simple().to_string(),
+                group_id: request.group_id,
+                run_id: request.run_id,
+                producer_node_id,
+                producer_anonymous,
+                consumer_node_id,
+                consumer_anonymous,
+                created_at: request.task.created_at,
+                delivered_at: request.task.delivered_at,
+                pushed_at,
+                ttl: request.task.ttl,
+                ancestry: request.task_ancestry,
+                task_type: request.task.task_type,
+                recordset,
+            },
+        )
+    } else {
+        unimplemented!()
+    }
+}
+
+pub(super) fn new_task_result(request: NewTaskInstructionOrResult) -> (Uuid, TaskResult) {
+    if let handler::Result::RecordSet(recordset) = request.task.result {
+        let id = Uuid::new_v4();
+        let pushed_at = Utc::now().timestamp() as f64;
+        let (producer_node_id, producer_anonymous) = (&request.task.producer).into();
+        let (consumer_node_id, consumer_anonymous) = (&request.task.consumer).into();
+        (
+            id,
+            TaskResult {
+                id: id.as_simple().to_string(),
                 group_id: request.group_id,
                 run_id: request.run_id,
                 producer_node_id,

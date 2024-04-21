@@ -9,44 +9,45 @@ license = "Apache-2.0"
 name = "superlink"
 path = "src/bin/superlink.rs"
 
-[[bin]]
-name = "migration"
-path = "src/bin/migration.rs"
-
 [dependencies]
 anyhow = "1.0.82"
 async-trait = "0.1.80"
+barrel = { version = "0.7.0", features = ["pg"] }
 chrono = "0.4.38"
 clap = { version = "4.5.4", features = ["derive"] }
+diesel = { version = "2.1.1", features = ["postgres_backend", "chrono"] }
+diesel-async = { version = "0.4.1", features = ["bb8", "postgres"] }
+diesel-derive-enum = { version = "2.1.0", features = ["postgres"] }
 field = "0.1.0"
 figment = { version = "0.10.18", features = ["env", "yaml"] }
 frunk = "0.4.2"
 futures = "0.3.30"
 garde = { version = "0.18.0", features = ["full"] }
 http = "0.2.12"
-hyper = "0.14.28"
 http-body = "0.4.6"
+hyper = "0.14.28"
 itertools = "0.12.1"
 metrics = "0.22.3"
-tokio-postgres = { version = "0.7.10", features = [
-    "with-chrono-0_4",
-    "with-uuid-1",
-] }
 metrics-exporter-prometheus = "0.14.0"
+opentelemetry = "0.22.0"
+opentelemetry-otlp = { version = "0.15.0", features = ["tonic"] }
+opentelemetry-semantic-conventions = "0.14.0"
+opentelemetry_sdk = { version = "0.22.1", features = ["rt-tokio"] }
+pin-project-lite = "0.2.14"
 prost = "0.12.4"
 rand = "0.8.5"
+refinery = { version = "0.8.14", features = ["tokio-postgres", "postgres"] }
 serde = { version = "1.0.198", features = ["derive"] }
-sqlx = { version = "0.7.4", features = [
-    "postgres",
-    "runtime-tokio-rustls",
-    "uuid",
-    "chrono",
-] }
 tokio = { version = "1.37.0", features = [
     "rt-multi-thread",
     "macros",
     "signal",
 ] }
+tokio-postgres = { version = "0.7.10", features = [
+    "with-chrono-0_4",
+    "with-uuid-1",
+] }
+tokio-postgres-rustls = "0.11.0"
 tonic = { version = "0.11.0", features = ["tls"] }
 tonic-health = "0.11.0"
 # derive_more = { version = "1.0.0-beta.6", features = ["full"] }
@@ -62,25 +63,9 @@ tower-http = { version = "0.4.4", features = [
 ] }
 # tower_governor = "0.1.0"
 tracing = "0.1.40"
+tracing-opentelemetry = "0.23.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 uuid = { version = "1.8.0", features = ["v4"] }
-pin-project-lite = "0.2.14"
-opentelemetry = "0.22.0"
-opentelemetry_sdk = { version = "0.22.1", features = ["rt-tokio"] }
-tracing-opentelemetry = "0.23.0"
-opentelemetry-otlp = { version = "0.15.0", features = ["tonic"] }
-opentelemetry-semantic-conventions = "0.14.0"
-barrel = { version = "0.7.0", features = ["pg"] }
-refinery = { version = "0.8.14", features = ["tokio-postgres", "postgres"] }
-tokio-postgres-rustls = "0.11.0"
-diesel = { version = "2.1.1", features = [
-    "postgres_backend",
-    "serde_json",
-    "time",
-    "uuid",
-] }
-diesel-async = { version = "0.4.1", features = ["bb8", "postgres"] }
-diesel-derive-enum = { version = "2.1.0", features = ["postgres"] }
 
 [build-dependencies]
 tonic-build = "0.11.0"

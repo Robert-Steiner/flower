@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 use anyhow::Ok;
+use chrono::Utc;
 use itertools::Itertools;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::{
     error::Error,
-    handler::common::{new_id, new_task_instruction_or_result},
+    handler::common::{new_id, new_task_instruction},
     model::handler::{PullTaskResultResponse, PullTaskResultsRequest, PushTaskInstructionsRequest},
     state::State,
 };
@@ -38,7 +39,7 @@ impl DriverHandler {
 
     #[instrument(skip_all, level = "debug")]
     pub async fn nodes(&self, run_id: i64) -> Result<HashSet<i64>, Error> {
-        let nodes = self.state.nodes(run_id).await?;
+        let nodes = self.state.nodes(run_id, Utc::now()).await?;
 
         info!(
             sample = ?nodes.iter().take(5).collect_vec(),
@@ -55,7 +56,7 @@ impl DriverHandler {
         let (task_ids, task_instructions): (Vec<_>, Vec<_>) = request
             .instructions
             .into_iter()
-            .map(new_task_instruction_or_result)
+            .map(new_task_instruction)
             .unzip();
 
         self.state

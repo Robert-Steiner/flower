@@ -12,3 +12,8 @@ docker-run:
 
 docker-compose:
     docker-compose -f docker/compose.yml up --remove-orphans
+
+generate-schema:
+    diesel \
+    --database-url 'postgres://root:pw@localhost:5432/flwr'  \
+    print-schema > rust/src/state/schema.rs

@@ -11,7 +11,7 @@ use flwr::{
         fleet::FleetService,
         pb::{driver_server::DriverServer, fleet_server::FleetServer},
     },
-    state::postgres::Postgres,
+    state::{migration::run_migration, postgres::Postgres},
     tracing::{init_tracing, tracing_span},
 };
 use garde::Validate;
@@ -22,6 +22,7 @@ use tokio::{
     signal::unix::{signal, SignalKind},
     sync::oneshot::{self},
 };
+
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -41,10 +42,16 @@ async fn main() -> Result<(), Error> {
         config.validate(&())?;
         return Ok(());
     }
-    config.validate(&())?;
 
+    config.validate(&())?;
     init_tracing(&config)?;
     debug!("config: {config:#?}");
+
+    if config.migration {
+        info!("Run database migration");
+        run_migration(&config.database).await?;
+        return Ok(());
+    }
 
     let state = Box::new(Postgres::new(&config.database.uri.unwrap()).await?);
 

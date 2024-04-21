@@ -28,6 +28,11 @@ pub fn read_config() -> Result<Config, Error> {
 #[derive(Parser, Debug, Serialize, Deserialize, garde::Validate)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
+    #[arg(long)]
+    #[garde(skip)]
+    /// run migration only
+    pub migration: bool,
+
     #[arg(short, long)]
     #[garde(skip)]
     /// yaml config file
