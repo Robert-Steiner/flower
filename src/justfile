@@ -2,13 +2,13 @@ default:
     @{{just_executable()}} --list
 
 docker-build:
-    docker build -f docker/server-rust/Dockerfile -t "server:latest" .
+    docker build -f docker/superlink/Dockerfile -t "superlink:latest" .
 
 docker-build-distroless:
-    docker build -f docker/server-rust/Dockerfile --build-arg base_image=distroless -t "server:latest" .
+    docker build -f docker/superlink/Dockerfile --build-arg base_image=distroless -t "superlink:latest" .
 
 docker-run:
-    docker run --rm -p 50051:50051 "server:latest"
+    docker run --rm -p 50051:50051 "superlink:latest"
 
 docker-compose:
     docker-compose -f docker/compose.yml up --remove-orphans
