@@ -6,7 +6,6 @@ use prost::Message;
 use tonic::{Request, Response, Status};
 use tonic_types::{ErrorDetails, FieldViolation};
 use tracing::instrument;
-use uuid::Uuid;
 
 use crate::{
     error::Error,
@@ -137,22 +136,9 @@ impl TryFrom<pb::PullTaskResRequest> for PullTaskResultsRequest {
     type Error = ErrorDetails;
 
     fn try_from(value: pb::PullTaskResRequest) -> Result<Self, Self::Error> {
-        let mut err_details = ErrorDetails::new();
-        let path = field!(task_ids @ pb::PullTaskResRequest);
-
-        let task_ids: Result<HashSet<_>, _> = value
-            .task_ids
-            .into_iter()
-            .map(|id| Uuid::parse_str(&id))
-            .collect();
-
-        match task_ids {
-            Ok(ids) => Ok(Self { ids }),
-            Err(error) => {
-                err_details.add_bad_request_violation(path, error.to_string());
-                Err(err_details)
-            }
-        }
+        // TODO it is infallible
+        let ids = HashSet::from_iter(value.task_ids.iter().cloned());
+        Ok(Self { ids })
     }
 }
 

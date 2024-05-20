@@ -64,9 +64,6 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(task_ins -> run (run_id));
-diesel::joinable!(task_res -> run (run_id));
-
 diesel::allow_tables_to_appear_in_same_query!(
     node,
     refinery_schema_history,

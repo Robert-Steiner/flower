@@ -2,7 +2,7 @@ default:
     @{{just_executable()}} --list
 
 docker-compose-up:
-    docker-compose -f compose.yml up --remove-orphans --build -d
+    docker-compose -f compose.yml up --remove-orphans --build -d --pull always
 
 docker-compose-down:
     docker-compose -f compose.yml down

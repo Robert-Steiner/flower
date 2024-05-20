@@ -88,7 +88,9 @@ impl DriverHandler {
             total = task_results.len(),
         );
 
-        self.state.delete_tasks(request.ids).await?;
+        let to_delete_tasks = task_results.iter().map(|tr| tr.id.clone()).collect();
+
+        self.state.delete_tasks(&to_delete_tasks).await?;
 
         Ok(task_results)
     }

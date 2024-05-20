@@ -1,4 +1,4 @@
-ARG rust_version=1.75
+ARG rust_version=1.78
 ARG base_image=debian
 
 FROM rust:${rust_version} as builder

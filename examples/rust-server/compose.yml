@@ -87,6 +87,8 @@ services:
     command: --server flwr_superlink:${SERVER_PORT:-50051} --insecure client:flower
     networks:
       - internal
+    volumes:
+      - client_data:/app/data
     depends_on:
         flwr_superlink:
           condition: service_healthy
@@ -149,3 +151,4 @@ networks:
 volumes:
   postgres_data:
   grafana-storage:
+  client_data:

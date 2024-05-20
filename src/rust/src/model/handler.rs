@@ -1,7 +1,5 @@
 use std::{collections::HashSet, time::Duration};
 
-use uuid::Uuid;
-
 #[derive(Debug)]
 pub enum Node {
     Id(i64),
@@ -10,7 +8,7 @@ pub enum Node {
 
 #[derive(Debug)]
 pub struct TaskInstructionOrResult {
-    pub id: String, //convert to uuid
+    pub id: String,
     pub group_id: String,
     pub run_id: i64,
     pub producer: Node,
@@ -52,7 +50,7 @@ pub struct PushTaskInstructionsRequest {
 
 #[derive(Debug)]
 pub struct PullTaskResultsRequest {
-    pub ids: HashSet<Uuid>,
+    pub ids: HashSet<String>,
 }
 
 #[derive(Debug)]

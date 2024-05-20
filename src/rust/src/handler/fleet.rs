@@ -11,7 +11,7 @@ use crate::{
         AcknowledgePingRequest, CreateNodeRequest, DeleteNodeRequest, Node as HandlerNode,
         PullTaskInstructionsRequest, PullTaskInstructionsResult, PushTaskResultRequest,
     },
-    state::{models::Node, State},
+    state::{models::Node, Limit, State},
 };
 
 #[derive(Debug)]
@@ -55,7 +55,10 @@ impl FleetHandler {
         &self,
         request: &PullTaskInstructionsRequest,
     ) -> Result<Vec<PullTaskInstructionsResult>, Error> {
-        let instructions = self.state.task_instructions(&request.node, 1).await?;
+        let instructions = self
+            .state
+            .task_instructions(&request.node, Limit::new_unchecked(1))
+            .await?;
 
         info!(
             node = ?request.node,

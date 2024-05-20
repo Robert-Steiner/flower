@@ -2,13 +2,13 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use diesel::{debug_query, ExpressionMethods, QueryDsl};
+use diesel::dsl::now;
+use diesel::{debug_query, ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{pooled_connection::bb8::Pool, AsyncPgConnection};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use tracing::{debug, instrument};
-use uuid::Uuid;
 
 use crate::{
     error::Error,
@@ -17,6 +17,7 @@ use crate::{
 };
 
 use super::models::{TaskInstruction, TaskResult};
+use super::Limit;
 use super::{models::Node, State};
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,16 @@ impl Postgres {
         let mgr = AsyncDieselConnectionManager::<AsyncPgConnection>::new(uri);
         let pool = Pool::builder().build(mgr).await?;
         Ok(Self { pool })
+    }
+
+    #[cfg(test)]
+    async fn connection(
+        &self,
+    ) -> Result<
+        diesel_async::pooled_connection::bb8::PooledConnection<AsyncPgConnection>,
+        diesel_async::pooled_connection::bb8::RunError,
+    > {
+        self.pool.get().await
     }
 }
 
@@ -58,57 +69,72 @@ impl State for Postgres {
     async fn task_instructions(
         &self,
         node: &HandlerNode,
-        limit: u32,
+        limit: Limit,
     ) -> Result<Vec<PullTaskInstructionsResult>, Error> {
-        unimplemented!()
-        // let mut tx = self.pool.begin().await?;
+        let mut conn = self.pool.get().await?;
 
-        // let mut query_builder = QueryBuilder::new("SELECT task_id FROM task_ins ");
+        let task_instructions: Vec<TaskInstruction> = conn
+            .transaction::<_, diesel::result::Error, _>(|conn| {
+                async move {
+                    use self::schema::task_ins;
 
-        // match node {
-        //     Node::Id(id) => query_builder
-        //         .push("WHERE consumer_anonymous IS FALSE AND consumer_node_id = ")
-        //         .push_bind(id),
-        //     Node::Anonymous => {
-        //         query_builder.push("WHERE consumer_anonymous IS TRUE AND consumer_node_id = 0")
-        //     }
-        // };
+                    let mut query = task_ins::table.select(task_ins::id).into_boxed();
 
-        // query_builder.push(" AND delivered_at = ''");
-        // if limit > 0 {
-        //     query_builder.push(" LIMIT ").push_bind(limit as i64);
-        // }
-        // query_builder.push(";");
+                    query = match node {
+                        HandlerNode::Id(id) => query
+                            .filter(task_ins::consumer_anonymous.eq(false))
+                            .filter(task_ins::consumer_node_id.eq(id)),
+                        HandlerNode::Anonymous => query
+                            .filter(task_ins::consumer_anonymous.eq(true))
+                            .filter(task_ins::consumer_node_id.eq(0)),
+                    };
 
-        // let query = query_builder.build();
-        // let task_ids: Vec<String> = query
-        //     .try_map(|row: PgRow| row.try_get::<String, _>("task_id"))
-        //     .fetch_all(&mut *tx)
-        //     .await?;
+                    query = query
+                        .filter(task_ins::delivered_at.eq(""))
+                        .limit(limit.limit());
 
-        // if task_ids.is_empty() {
-        //     Ok(Vec::new())
-        // } else {
-        //     let delivered_at = Utc::now();
-        //     let mut query_builder = QueryBuilder::new("UPDATE task_ins SET delivered_at = ");
-        //     query_builder
-        //         .push_bind(delivered_at.to_rfc3339())
-        //         .push(" WHERE task_id IN (");
-        //     let mut separated = query_builder.separated(", ");
-        //     for value_type in task_ids.iter() {
-        //         separated.push_bind(value_type);
-        //     }
-        //     separated.push_unseparated(") RETURNING *;");
+                    debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                    let task_ids = query.load::<String>(conn).await?;
 
-        //     let query = query_builder.build();
-        //     let task_ins = query
-        //         .persistent(false)
-        //         .try_map(|row| PullTaskInstructionsResult::from_row(&row))
-        //         .fetch_all(&mut *tx)
-        //         .await?;
-        //     tx.commit().await?;
-        //     Ok(task_ins)
-        // }
+                    if task_ids.is_empty() {
+                        return Ok(Vec::new());
+                    }
+
+                    let delivered_at = Utc::now().to_rfc3339();
+                    let mut updated_task_instructions = Vec::new();
+                    for task_id in task_ids {
+                        let query = diesel::update(task_ins::table)
+                            .filter(task_ins::id.eq(task_id))
+                            .set(task_ins::delivered_at.eq(delivered_at.clone()));
+                        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                        let updated = query.get_result::<TaskInstruction>(conn).await?;
+
+                        updated_task_instructions.push(updated);
+                    }
+
+                    Ok(updated_task_instructions)
+                }
+                .scope_boxed()
+            })
+            .await?;
+
+        Ok(task_instructions
+            .into_iter()
+            .map(|i| PullTaskInstructionsResult {
+                id: i.id,
+                group_id: i.group_id,
+                run_id: i.run_id,
+                producer: (i.producer_node_id, i.producer_anonymous).into(),
+                consumer: (i.consumer_node_id, i.consumer_anonymous).into(),
+                created_at: i.created_at,
+                delivered_at: i.delivered_at,
+                pushed_at: i.pushed_at,
+                ttl: i.ttl,
+                ancestry: i.ancestry,
+                task_type: i.task_type,
+                recordset: i.recordset,
+            })
+            .collect())
     }
 
     #[instrument(skip_all, level = "debug")]
@@ -126,67 +152,136 @@ impl State for Postgres {
     #[instrument(skip_all, level = "debug")]
     async fn task_results(
         &self,
-        ids: &HashSet<Uuid>,
-        limit: Option<u32>,
+        ids: &HashSet<String>,
+        limit: Option<Limit>,
     ) -> Result<Vec<PullTaskResultResponse>, Error> {
-        unimplemented!()
-        // if ids.is_empty() {
-        //     return Ok(Vec::new());
-        // }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        // let mut tx = self.pool.begin().await?;
+        let mut conn = self.pool.get().await?;
+        let task_ids = ids.clone();
 
-        // let mut query_builder = QueryBuilder::new("SELECT * FROM task_res WHERE ancestry IN (");
-        // let mut separated = query_builder.separated(", ");
-        // for id in ids.iter() {
-        //     separated.push_bind(id.as_simple().to_string());
-        // }
-        // separated.push_unseparated(") AND delivered_at = ''");
+        let (task_results, _task_instructions): (Vec<TaskResult>, Vec<TaskInstruction>) = conn
+            .transaction::<_, diesel::result::Error, _>(|conn| {
+                async move {
+                    use self::schema::node;
+                    use self::schema::task_ins;
+                    use self::schema::task_res;
 
-        // if let Some(limit) = limit {
-        //     separated
-        //         .push_unseparated(" LIMIT ")
-        //         .push_bind_unseparated(limit as i64);
-        // }
-        // separated.push_unseparated(";");
+                    let mut query = task_res::table
+                        .select(TaskResult::as_select())
+                        .filter(task_res::ancestry.eq_any(task_ids.clone()))
+                        .filter(task_res::delivered_at.eq(""))
+                        .into_boxed();
 
-        // let query = query_builder.build();
-        // let task_res = query
-        //     .persistent(false)
-        //     .try_map(|row| PullTaskResultResponse::from_row(&row))
-        //     .fetch_all(&mut *tx)
-        //     .await?;
+                    if let Some(limit) = &limit {
+                        query = query.limit(limit.limit());
+                    }
 
-        // if task_res.is_empty() {
-        //     Ok(Vec::new())
-        // } else {
-        //     let delivered_at = Utc::now();
-        //     let mut query_builder = QueryBuilder::new("UPDATE task_res SET delivered_at = ");
-        //     query_builder
-        //         .push_bind(delivered_at.to_rfc3339())
-        //         .push(" WHERE task_id IN (");
-        //     let mut separated = query_builder.separated(", ");
-        //     for value_type in task_res.iter() {
-        //         separated.push_bind(&value_type.id);
-        //     }
-        //     separated.push_unseparated(") RETURNING *;");
+                    debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                    let task_results = query.load::<TaskResult>(conn).await?;
 
-        //     let query = query_builder.build();
-        //     query.persistent(false).execute(&mut *tx).await?;
-        //     tx.commit().await?;
-        //     Ok(task_res)
-        // }
+                    if task_results.is_empty() {
+                        return Ok((Vec::new(), Vec::new()));
+                    }
+
+                    let delivered_at = Utc::now().to_rfc3339();
+                    let mut updated_task_results = Vec::new();
+                    for mut task_result in task_results {
+                        task_result.delivered_at = delivered_at.clone();
+                        let query = diesel::update(task_res::table).set(task_result);
+                        debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                        let updated = query.get_result::<TaskResult>(conn).await?;
+
+                        updated_task_results.push(updated);
+                    }
+
+                    // 1. Query: Fetch consumer_node_id of remaining task_ids
+                    // Assume the ancestry field only contains one element
+                    let replied_task_ids: HashSet<String> = updated_task_results
+                        .iter()
+                        .map(|tr| tr.ancestry.clone())
+                        .collect();
+                    let remaining_task_ids = ids - &replied_task_ids;
+
+                    let query = task_ins::table
+                        .select(task_ins::consumer_node_id)
+                        .filter(task_ins::id.eq_any(remaining_task_ids));
+
+                    debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                    let node_ids = query.load::<i64>(conn).await?;
+
+                    // 2. Query: Select offline nodes
+                    let query = node::table
+                        .select(node::id)
+                        .filter(node::id.eq_any(node_ids))
+                        .filter(node::online_until.lt(now));
+
+                    debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                    let offline_node_ids = query.load::<i64>(conn).await?;
+
+                    // 3. Query: Select TaskIns for offline nodes
+                    let query = task_ins::table
+                        .select(TaskInstruction::as_select())
+                        .filter(task_ins::consumer_node_id.eq_any(offline_node_ids));
+
+                    debug!("sql: {:?}", debug_query::<diesel::pg::Pg, _>(&query));
+                    let task_ins_rows = query.load::<TaskInstruction>(conn).await?;
+
+                    Ok((updated_task_results, task_ins_rows))
+                }
+                .scope_boxed()
+            })
+            .await?;
+
+        // # Make TaskRes containing node unavailable error
+        if let Some(limit) = &limit {
+            if task_results.len() != limit.limit() as usize {
+                // for row in task_ins_rows:
+                //     if limit and len(result) == limit:
+                //         break
+                //     task_ins = dict_to_task_ins(row)
+                //     err_taskres = make_node_unavailable_taskres(
+                //         ref_taskins=task_ins,
+                //     )
+                //     result.append(err_taskres)
+                unimplemented!();
+            }
+        }
+
+        Ok(task_results
+            .into_iter()
+            .map(|i| PullTaskResultResponse {
+                id: i.id,
+                group_id: i.group_id,
+                run_id: i.run_id,
+                producer: (i.producer_node_id, i.producer_anonymous).into(),
+                consumer: (i.consumer_node_id, i.consumer_anonymous).into(),
+                created_at: i.created_at,
+                delivered_at: i.delivered_at,
+                pushed_at: i.pushed_at,
+                ttl: i.ttl,
+                ancestry: i.ancestry,
+                task_type: i.task_type,
+                recordset: i.recordset,
+            })
+            .collect())
     }
 
     #[instrument(skip_all, level = "debug")]
-    async fn delete_tasks(&self, ids: HashSet<Uuid>) -> Result<(), Error> {
-        use self::schema::task_ins;
-        use self::schema::task_res;
+    async fn delete_tasks(&self, ids: &HashSet<String>) -> Result<(), Error> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
         let mut conn = self.pool.get().await?;
 
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             async move {
-                let ids = ids.iter().map(|uuid| uuid.as_simple().to_string());
+                use self::schema::task_ins;
+                use self::schema::task_res;
+
                 let inner_query = task_res::table
                     .select(task_res::ancestry)
                     .filter(task_res::ancestry.eq_any(ids.clone()))
@@ -295,5 +390,249 @@ impl From<&HandlerNode> for (i64, bool) {
             HandlerNode::Id(id) => (*id, false),
             HandlerNode::Anonymous => (0, true),
         }
+    }
+}
+
+impl From<(i64, bool)> for HandlerNode {
+    fn from(value: (i64, bool)) -> Self {
+        match value {
+            (id, false) => HandlerNode::Id(id),
+            (0, true) => HandlerNode::Anonymous,
+            _ => panic!(/* TODO */),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use testcontainers::{runners::AsyncRunner, ContainerAsync, RunnableImage};
+
+    use super::*;
+    use crate::{
+        config::Database,
+        state::{migration::run_migration, models::Node, postgres::Postgres, State},
+    };
+
+    async fn new_db() -> (
+        ContainerAsync<testcontainers_modules::postgres::Postgres>,
+        Postgres,
+    ) {
+        let container = RunnableImage::from(testcontainers_modules::postgres::Postgres::default())
+            .with_tag("16-alpine")
+            .start()
+            .await;
+
+        let uri = format!(
+            "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+            container.get_host_port_ipv4(5432).await
+        );
+
+        let config = &Database { uri: uri.into() };
+
+        run_migration(&config).await.unwrap();
+
+        let db = Postgres::new(config.uri.as_ref().unwrap()).await.unwrap();
+
+        return (container, db);
+    }
+
+    #[tokio::test]
+    async fn test_insert_node() {
+        let (_guard, db) = new_db().await;
+
+        let node = Node::default();
+        let result = db.insert_node(&node).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::node;
+        let result = node::table
+            .select(node::all_columns)
+            .filter(node::id.eq(node.id))
+            .first(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(node, result)
+    }
+
+    #[tokio::test]
+    async fn test_insert_node_already_exists() {
+        let (_guard, db) = new_db().await;
+
+        let node = Node::default();
+
+        let result = db.insert_node(&node).await;
+        matches!(result, Ok(_));
+
+        let result = db.insert_node(&node).await;
+        matches!(result, Err(_));
+    }
+
+    #[tokio::test]
+    async fn test_update_ping() {
+        let (_guard, db) = new_db().await;
+
+        let node = Node::default();
+        let result = db.insert_node(&node).await;
+        matches!(result, Ok(_));
+
+        let updated_ping = Node {
+            ping_interval: 20.0,
+            ..node
+        };
+        let result = db.update_ping(&updated_ping).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::node;
+        let result = node::table
+            .select(node::all_columns)
+            .filter(node::id.eq(node.id))
+            .first(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(updated_ping, result)
+    }
+
+    #[tokio::test]
+    async fn test_update_ping_not_exists() {
+        let (_guard, db) = new_db().await;
+
+        let result = db.update_ping(&Node::default()).await;
+        matches!(result, Err(_));
+    }
+
+    #[tokio::test]
+    async fn test_delete_node() {
+        let (_guard, db) = new_db().await;
+
+        let node = Node::default();
+        let result = db.insert_node(&node).await;
+        matches!(result, Ok(_));
+
+        let result = db.delete_node(node.id).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::node;
+        let result = node::table
+            .select(node::all_columns)
+            .filter(node::id.eq(node.id))
+            .first::<Node>(&mut conn)
+            .await;
+
+        matches!(result, Err(diesel::NotFound));
+    }
+
+    #[tokio::test]
+    async fn test_delete_node_not_exists() {
+        let (_guard, db) = new_db().await;
+
+        let result = db.delete_node(1).await;
+        matches!(result, Err(_));
+    }
+
+    #[tokio::test]
+    async fn test_insert_run() {
+        let (_guard, db) = new_db().await;
+
+        let id = 1;
+        let result = db.insert_run(id).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::run;
+        let result = run::table
+            .select(run::id)
+            .filter(run::id.eq(id))
+            .first::<i64>(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(id, result)
+    }
+
+    #[tokio::test]
+    async fn test_insert_run_already_exists() {
+        let (_guard, db) = new_db().await;
+
+        let id = 1;
+        let result = db.insert_run(id).await;
+        matches!(result, Ok(_));
+
+        let result = db.insert_run(id).await;
+        matches!(result, Err(_));
+    }
+
+    #[tokio::test]
+    async fn test_insert_task_instruction() {
+        let (_guard, db) = new_db().await;
+
+        let instruction = [TaskInstruction::default()];
+        let result = db.insert_task_instructions(&instruction).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::task_ins;
+        let result = task_ins::table
+            .select(task_ins::all_columns)
+            .filter(task_ins::id.eq(&instruction[0].id))
+            .first(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(instruction[0], result)
+    }
+
+    #[tokio::test]
+    async fn test_insert_task_instruction_already_exists() {
+        let (_guard, db) = new_db().await;
+
+        let instruction = [TaskInstruction::default()];
+        let result = db.insert_task_instructions(&instruction).await;
+        matches!(result, Ok(_));
+
+        let result = db.insert_task_instructions(&instruction).await;
+        matches!(result, Err(_));
+    }
+
+    #[tokio::test]
+    async fn test_insert_task_result() {
+        let (_guard, db) = new_db().await;
+
+        let task_result = TaskResult::default();
+        let result = db.insert_task_result(&task_result).await;
+        matches!(result, Ok(_));
+
+        let mut conn = db.connection().await.unwrap();
+
+        use self::schema::task_res;
+        let result = task_res::table
+            .select(task_res::all_columns)
+            .filter(task_res::id.eq(&task_result.id))
+            .first(&mut conn)
+            .await
+            .unwrap();
+
+        assert_eq!(task_result, result)
+    }
+
+    #[tokio::test]
+    async fn test_insert_task_result_already_exists() {
+        let (_guard, db) = new_db().await;
+
+        let task_result = TaskResult::default();
+        let result = db.insert_task_result(&task_result).await;
+        matches!(result, Ok(_));
+
+        let result = db.insert_task_result(&task_result).await;
+        matches!(result, Err(_));
     }
 }

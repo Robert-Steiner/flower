@@ -214,5 +214,4 @@ pub struct Database {
     pub uri: Option<String>,
 }
 
-// let a = <FleetServer<FleetService>>::NAME;
-// let b = <HealthServer<tonic_health::server::HealthService>>::NAME;
+

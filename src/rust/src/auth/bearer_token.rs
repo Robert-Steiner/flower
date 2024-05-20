@@ -19,3 +19,5 @@ pub fn noop_config<ResBody>(
         })
     }
 }
+// let a = <FleetServer<FleetService>>::NAME;
+// let b = <HealthServer<tonic_health::server::HealthService>>::NAME;

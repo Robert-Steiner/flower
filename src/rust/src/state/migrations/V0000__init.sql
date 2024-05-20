@@ -20,8 +20,7 @@ CREATE TABLE IF NOT EXISTS task_ins(
     ttl DOUBLE PRECISION NOT NULL,
     ancestry TEXT NOT NULL,
     task_type TEXT NOT NULL,
-    recordset BYTEA NOT NULL,
-    FOREIGN KEY(run_id) REFERENCES run(id)
+    recordset BYTEA NOT NULL
 );
 CREATE TABLE IF NOT EXISTS task_res(
     id TEXT PRIMARY KEY,
@@ -37,6 +36,5 @@ CREATE TABLE IF NOT EXISTS task_res(
     ttl DOUBLE PRECISION NOT NULL,
     ancestry TEXT NOT NULL,
     task_type TEXT NOT NULL,
-    recordset BYTEA NOT NULL,
-    FOREIGN KEY(run_id) REFERENCES run(id)
+    recordset BYTEA NOT NULL
 );
